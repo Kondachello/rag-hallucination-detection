@@ -1,0 +1,474 @@
+{
+  "response_metrics": {
+    "train": [
+      {
+        "key": "hallugraph_raw",
+        "name": "HalluGraph raw score",
+        "metrics": {
+          "n": 582,
+          "threshold": 0.34166666666666656,
+          "AUROC": 0.7023936170212766,
+          "AUPRC": 0.7024786936159755,
+          "precision": 0.626984126984127,
+          "recall": 0.79,
+          "specificity": 0.5,
+          "F1": 0.6991150442477876,
+          "balanced_accuracy": 0.645,
+          "brier": 0.22849316800291125,
+          "ece_10": 0.09176458024386605,
+          "confusion": {
+            "tp": 237,
+            "fp": 141,
+            "tn": 141,
+            "fn": 63
+          }
+        }
+      },
+      {
+        "key": "grapheval_raw",
+        "name": "GraphEval raw score",
+        "metrics": {
+          "n": 582,
+          "threshold": 0.31944596767425537,
+          "AUROC": 0.7529787234042553,
+          "AUPRC": 0.7616181608458775,
+          "precision": 0.6437659033078881,
+          "recall": 0.8433333333333334,
+          "specificity": 0.5035460992907801,
+          "F1": 0.7301587301587301,
+          "balanced_accuracy": 0.6734397163120567,
+          "brier": 0.23722523352420669,
+          "ece_10": 0.17399268926647762,
+          "confusion": {
+            "tp": 253,
+            "fp": 140,
+            "tn": 142,
+            "fn": 47
+          }
+        }
+      },
+      {
+        "key": "combined_max",
+        "name": "max(HalluGraph, GraphEval)",
+        "metrics": {
+          "n": 582,
+          "threshold": 0.4833333333333334,
+          "AUROC": 0.7571631205673759,
+          "AUPRC": 0.7641127982719769,
+          "precision": 0.662303664921466,
+          "recall": 0.8433333333333334,
+          "specificity": 0.5425531914893617,
+          "F1": 0.7419354838709677,
+          "balanced_accuracy": 0.6929432624113475,
+          "brier": 0.2312061558043871,
+          "ece_10": 0.1614555686882869,
+          "confusion": {
+            "tp": 253,
+            "fp": 129,
+            "tn": 153,
+            "fn": 47
+          }
+        }
+      },
+      {
+        "key": "combined_mean",
+        "name": "mean(HalluGraph, GraphEval)",
+        "metrics": {
+          "n": 582,
+          "threshold": 0.3349070171515147,
+          "AUROC": 0.7564420803782506,
+          "AUPRC": 0.7512329700195366,
+          "precision": 0.6516290726817042,
+          "recall": 0.8666666666666667,
+          "specificity": 0.5070921985815603,
+          "F1": 0.7439198855507868,
+          "balanced_accuracy": 0.6868794326241134,
+          "brier": 0.19924524587336273,
+          "ece_10": 0.04763920361953236,
+          "confusion": {
+            "tp": 260,
+            "fp": 139,
+            "tn": 143,
+            "fn": 40
+          }
+        }
+      },
+      {
+        "key": "combined_min",
+        "name": "min(HalluGraph, GraphEval)",
+        "metrics": {
+          "n": 582,
+          "threshold": 0.23696821928024292,
+          "AUROC": 0.7383983451536643,
+          "AUPRC": 0.725742304018165,
+          "precision": 0.6454081632653061,
+          "recall": 0.8433333333333334,
+          "specificity": 0.5070921985815603,
+          "F1": 0.7312138728323699,
+          "balanced_accuracy": 0.6752127659574468,
+          "brier": 0.2345122457227308,
+          "ece_10": 0.16115821712291076,
+          "confusion": {
+            "tp": 253,
+            "fp": 139,
+            "tn": 143,
+            "fn": 47
+          }
+        }
+      },
+      {
+        "key": "agreement_span",
+        "name": "agreement × span overlap",
+        "metrics": {
+          "n": 582,
+          "threshold": 0.014648871892256327,
+          "AUROC": 0.7372458628841607,
+          "AUPRC": 0.7895638909932368,
+          "precision": 0.6744868035190615,
+          "recall": 0.7666666666666667,
+          "specificity": 0.6063829787234043,
+          "F1": 0.717628705148206,
+          "balanced_accuracy": 0.6865248226950356,
+          "brier": 0.33641830928639055,
+          "ece_10": 0.3575127899870012,
+          "confusion": {
+            "tp": 230,
+            "fp": 111,
+            "tn": 171,
+            "fn": 70
+          }
+        }
+      },
+      {
+        "key": "grapheval_span_top3",
+        "name": "GraphEval top-3 span risk",
+        "metrics": {
+          "n": 582,
+          "threshold": 0.2588885426521301,
+          "AUROC": 0.7529314420803782,
+          "AUPRC": 0.7630905257139828,
+          "precision": 0.6320987654320988,
+          "recall": 0.8533333333333334,
+          "specificity": 0.4716312056737589,
+          "F1": 0.7262411347517731,
+          "balanced_accuracy": 0.6624822695035462,
+          "brier": 0.23205104202944274,
+          "ece_10": 0.15984496238568366,
+          "confusion": {
+            "tp": 256,
+            "fp": 149,
+            "tn": 133,
+            "fn": 44
+          }
+        }
+      },
+      {
+        "key": "grapheval_span_density",
+        "name": "GraphEval mean character risk",
+        "metrics": {
+          "n": 582,
+          "threshold": 0.03831415511667728,
+          "AUROC": 0.7362056737588653,
+          "AUPRC": 0.738486829142853,
+          "precision": 0.6507936507936508,
+          "recall": 0.82,
+          "specificity": 0.5319148936170213,
+          "F1": 0.7256637168141593,
+          "balanced_accuracy": 0.6759574468085106,
+          "brier": 0.4067054515803632,
+          "ece_10": 0.42568418520007395,
+          "confusion": {
+            "tp": 246,
+            "fp": 132,
+            "tn": 150,
+            "fn": 54
+          }
+        }
+      }
+    ],
+    "test": [
+      {
+        "key": "hallugraph_raw",
+        "name": "HalluGraph raw score",
+        "metrics": {
+          "n": 147,
+          "threshold": 0.34166666666666656,
+          "AUROC": 0.7423148148148148,
+          "AUPRC": 0.7405237033789207,
+          "precision": 0.648936170212766,
+          "recall": 0.8133333333333334,
+          "specificity": 0.5416666666666666,
+          "F1": 0.7218934911242604,
+          "balanced_accuracy": 0.6775,
+          "brier": 0.21327063403348615,
+          "ece_10": 0.10295120874096485,
+          "confusion": {
+            "tp": 61,
+            "fp": 33,
+            "tn": 39,
+            "fn": 14
+          }
+        }
+      },
+      {
+        "key": "grapheval_raw",
+        "name": "GraphEval raw score",
+        "metrics": {
+          "n": 147,
+          "threshold": 0.31944596767425537,
+          "AUROC": 0.8529629629629629,
+          "AUPRC": 0.871217845131314,
+          "precision": 0.723404255319149,
+          "recall": 0.9066666666666666,
+          "specificity": 0.6388888888888888,
+          "F1": 0.8047337278106509,
+          "balanced_accuracy": 0.7727777777777778,
+          "brier": 0.16933637091424128,
+          "ece_10": 0.1287541437330244,
+          "confusion": {
+            "tp": 68,
+            "fp": 26,
+            "tn": 46,
+            "fn": 7
+          }
+        }
+      },
+      {
+        "key": "combined_max",
+        "name": "max(HalluGraph, GraphEval)",
+        "metrics": {
+          "n": 147,
+          "threshold": 0.4833333333333334,
+          "AUROC": 0.8572222222222222,
+          "AUPRC": 0.8715218927857729,
+          "precision": 0.7333333333333333,
+          "recall": 0.88,
+          "specificity": 0.6666666666666666,
+          "F1": 0.8,
+          "balanced_accuracy": 0.7733333333333333,
+          "brier": 0.18099625941451636,
+          "ece_10": 0.15054549995838912,
+          "confusion": {
+            "tp": 66,
+            "fp": 24,
+            "tn": 48,
+            "fn": 9
+          }
+        }
+      },
+      {
+        "key": "combined_mean",
+        "name": "mean(HalluGraph, GraphEval)",
+        "metrics": {
+          "n": 147,
+          "threshold": 0.3349070171515147,
+          "AUROC": 0.8488888888888889,
+          "AUPRC": 0.8521476512340025,
+          "precision": 0.7216494845360825,
+          "recall": 0.9333333333333333,
+          "specificity": 0.625,
+          "F1": 0.813953488372093,
+          "balanced_accuracy": 0.7791666666666667,
+          "brier": 0.15964822395675568,
+          "ece_10": 0.10671499383406084,
+          "confusion": {
+            "tp": 70,
+            "fp": 27,
+            "tn": 45,
+            "fn": 5
+          }
+        }
+      },
+      {
+        "key": "combined_min",
+        "name": "min(HalluGraph, GraphEval)",
+        "metrics": {
+          "n": 147,
+          "threshold": 0.23696821928024292,
+          "AUROC": 0.8195370370370371,
+          "AUPRC": 0.8193497221876476,
+          "precision": 0.6764705882352942,
+          "recall": 0.92,
+          "specificity": 0.5416666666666666,
+          "F1": 0.7796610169491526,
+          "balanced_accuracy": 0.7308333333333333,
+          "brier": 0.20161074553321107,
+          "ece_10": 0.16381916651580045,
+          "confusion": {
+            "tp": 69,
+            "fp": 33,
+            "tn": 39,
+            "fn": 6
+          }
+        }
+      },
+      {
+        "key": "agreement_span",
+        "name": "agreement × span overlap",
+        "metrics": {
+          "n": 147,
+          "threshold": 0.014648871892256327,
+          "AUROC": 0.8275925925925925,
+          "AUPRC": 0.8698988558775631,
+          "precision": 0.7560975609756098,
+          "recall": 0.8266666666666667,
+          "specificity": 0.7222222222222222,
+          "F1": 0.7898089171974523,
+          "balanced_accuracy": 0.7744444444444445,
+          "brier": 0.3258031271718727,
+          "ece_10": 0.36938073987530107,
+          "confusion": {
+            "tp": 62,
+            "fp": 20,
+            "tn": 52,
+            "fn": 13
+          }
+        }
+      },
+      {
+        "key": "grapheval_span_top3",
+        "name": "GraphEval top-3 span risk",
+        "metrics": {
+          "n": 147,
+          "threshold": 0.2588885426521301,
+          "AUROC": 0.8529629629629629,
+          "AUPRC": 0.8705507799750567,
+          "precision": 0.6730769230769231,
+          "recall": 0.9333333333333333,
+          "specificity": 0.5277777777777778,
+          "F1": 0.7821229050279329,
+          "balanced_accuracy": 0.7305555555555556,
+          "brier": 0.1637085878183883,
+          "ece_10": 0.10751218258354671,
+          "confusion": {
+            "tp": 70,
+            "fp": 34,
+            "tn": 38,
+            "fn": 5
+          }
+        }
+      },
+      {
+        "key": "grapheval_span_density",
+        "name": "GraphEval mean character risk",
+        "metrics": {
+          "n": 147,
+          "threshold": 0.03831415511667728,
+          "AUROC": 0.8211111111111111,
+          "AUPRC": 0.8231859106112344,
+          "precision": 0.7,
+          "recall": 0.84,
+          "specificity": 0.625,
+          "F1": 0.7636363636363637,
+          "balanced_accuracy": 0.7324999999999999,
+          "brier": 0.401772492476345,
+          "ece_10": 0.42844042480292155,
+          "confusion": {
+            "tp": 63,
+            "fp": 27,
+            "tn": 45,
+            "fn": 12
+          }
+        }
+      }
+    ]
+  },
+  "span_metrics": {
+    "train": [
+      {
+        "method": "hallugraph",
+        "coverage": 0.9716193656093489,
+        "metrics": {
+          "n_responses": 582,
+          "n_positive_responses": 300,
+          "any_hit_rate": 0.9066666666666666,
+          "character_precision": 0.13160557893215039,
+          "character_recall": 0.3652027027027027,
+          "character_f1": 0.19348595783715453,
+          "micro_iou": 0.1071045966548391,
+          "mean_response_iou_positive": 0.143185508892637,
+          "gold_span_hit_rate": 0.9053763440860215,
+          "mean_gold_span_coverage": 0.23163347254154773,
+          "excess_share": 0.8683944210678496,
+          "excess_to_gold_ratio": 2.4097761824324326,
+          "negative_response_highlight_rate": 0.30224151157536333,
+          "mapping_rate": 0.9968657348581109,
+          "ambiguous_span_rate": 0.5374745071380014,
+          "predicted_chars": 131423,
+          "gold_chars": 47360
+        }
+      },
+      {
+        "method": "grapheval",
+        "coverage": 0.9716193656093489,
+        "metrics": {
+          "n_responses": 582,
+          "n_positive_responses": 300,
+          "any_hit_rate": 0.6366666666666667,
+          "character_precision": 0.32639960326206746,
+          "character_recall": 0.25014780405405407,
+          "character_f1": 0.2832313282968347,
+          "micro_iou": 0.16497932014092942,
+          "mean_response_iou_positive": 0.13866692177172044,
+          "gold_span_hit_rate": 0.6623655913978495,
+          "mean_gold_span_coverage": 0.15443118517682305,
+          "excess_share": 0.6736003967379326,
+          "excess_to_gold_ratio": 0.516237331081081,
+          "negative_response_highlight_rate": 0.0477831839342574,
+          "mapping_rate": 0.9995424178640065,
+          "ambiguous_span_rate": 0.6435634499175975,
+          "predicted_chars": 36296,
+          "gold_chars": 47360
+        }
+      }
+    ],
+    "test": [
+      {
+        "method": "hallugraph",
+        "coverage": 0.98,
+        "metrics": {
+          "n_responses": 147,
+          "n_positive_responses": 75,
+          "any_hit_rate": 0.96,
+          "character_precision": 0.14836849294278343,
+          "character_recall": 0.36428677895364436,
+          "character_f1": 0.2108577960873973,
+          "micro_iou": 0.1178541289933695,
+          "mean_response_iou_positive": 0.15368485359181344,
+          "gold_span_hit_rate": 0.9444444444444444,
+          "mean_gold_span_coverage": 0.1617241289439372,
+          "excess_share": 0.8516315070572166,
+          "excess_to_gold_ratio": 2.090997167983306,
+          "negative_response_highlight_rate": 0.29593477775295957,
+          "mapping_rate": 0.9941822882999354,
+          "ambiguous_span_rate": 0.5282834850455137,
+          "predicted_chars": 32945,
+          "gold_chars": 13418
+        }
+      },
+      {
+        "method": "grapheval",
+        "coverage": 0.98,
+        "metrics": {
+          "n_responses": 147,
+          "n_positive_responses": 75,
+          "any_hit_rate": 0.7733333333333333,
+          "character_precision": 0.3938347718865598,
+          "character_recall": 0.23803845580563424,
+          "character_f1": 0.29672984020810106,
+          "micro_iou": 0.17421184684193303,
+          "mean_response_iou_positive": 0.1597513014395494,
+          "gold_span_hit_rate": 0.75,
+          "mean_gold_span_coverage": 0.12042061335282916,
+          "excess_share": 0.6061652281134402,
+          "excess_to_gold_ratio": 0.3663735280965867,
+          "negative_response_highlight_rate": 0.02675899039535403,
+          "mapping_rate": 0.9996471418489767,
+          "ambiguous_span_rate": 0.6410165901870808,
+          "predicted_chars": 8110,
+          "gold_chars": 13418
+        }
+      }
+    ]
+  }
+}

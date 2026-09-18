@@ -1,0 +1,17 @@
+{
+  "analysis_version": "span-localization-audit-v2",
+  "analysis_only": true,
+  "archive_dir": "outputs/datasphere-results/zhenya-750all-final/zhenya-750all-20260726-165854/historical-cache-replay",
+  "archive_validation": {
+    "run_id": "historical-cache-replay",
+    "valid": true,
+    "errors": []
+  },
+  "responses_path": "outputs/datasphere-results/zhenya-750all-final/source/response.jsonl",
+  "responses_sha256": "e4c2e4ac24fff676d8984cc61c35d791612fadc58015335d97dd632375e18073",
+  "n_records": 749,
+  "n_viewer_records": 18,
+  "gold_join_timing": "post_seal_only",
+  "localization_policy": "literal/casefold/whitespace-normalized entity mentions; relation words are not invented",
+  "known_limit": "HalluGraph unit localization is binary because the archived output has no per-unit continuous risk."
+}
