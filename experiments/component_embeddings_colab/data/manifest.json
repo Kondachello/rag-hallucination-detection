@@ -1,0 +1,36 @@
+{
+  "schema": "component-embeddings-colab-v1",
+  "copied_on": "2026-09-27",
+  "sources": {
+    "inputs.no_gold.jsonl": {
+      "source": "component_embedding_dataset/data/inputs.no_gold.jsonl",
+      "sha256": "efa6b827fe20e57efee9153ff4710419c120fa6f968f2e62c243e9fab17b499e",
+      "bytes": 645806
+    },
+    "labels.csv": {
+      "source": "component_embedding_dataset/data/labels.csv",
+      "sha256": "de7fcdfa05c7da6424bd91d105506bef7887a7c3a6423b86ae1ab40796642b01",
+      "bytes": 3953
+    },
+    "components.no_gold.jsonl": {
+      "source": "component_embedding_dataset/experiment_2_component_embeddings/data/components.no_gold.jsonl",
+      "sha256": "a6467418cd4db2ab6014a0e6c4eca725e1a389cd9cc8a3454f9f5b2f4943b09a",
+      "bytes": 581409
+    },
+    "confirmation_features.no_gold.csv": {
+      "source": "component_embedding_dataset/experiment_2_component_embeddings/data/confirmation_features.no_gold.csv",
+      "sha256": "acb27027105af68de959697b5ebe6f447e5d54cb75dc7781667408aac8e85580",
+      "bytes": 18356
+    },
+    "folds.csv": {
+      "source": "component_embedding_dataset/experiment_2_component_embeddings/data/folds.csv",
+      "sha256": "fc3aa0695477f0da3d748cca563006fab5cca59c53ee4b234d18a9e29725c157",
+      "bytes": 2527
+    },
+    "hallugraph_features.no_gold.csv": {
+      "source": "component_embedding_dataset/experiment_1_graph_metrics/data/llama100_latest_features.no_gold.csv",
+      "sha256": "1b1bac5cde8c724f3a0e05fdc80c4a0c20f29e3169f863c797b72caa07dc332f",
+      "bytes": 11359
+    }
+  }
+}
