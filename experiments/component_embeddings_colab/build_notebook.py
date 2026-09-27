@@ -44,7 +44,7 @@ GPT-4o отделены от текстов и не используются п�
 from pathlib import Path
 import os, subprocess, sys
 
-REPO_URL = "https://github.com/Kondachello/hallu_smiles.git"
+REPO_URL = "https://github.com/Kondachello/rag-hallucination-detection.git"
 BRANCH = "span_by_kolya"  # измените, если папка опубликована в другой ветке
 SUBDIR = Path("experiments/component_embeddings_colab")
 
