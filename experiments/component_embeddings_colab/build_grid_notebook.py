@@ -19,7 +19,9 @@ cells = [
     md(r"""
 # Эксперимент 2.1: матрица «данные × модель»
 
-**Одна кнопка:** выберите GPU, затем «Среда выполнения → Выполнить все».
+**Одна кнопка:** выберите среду с графическим ускорителем, затем
+«Среда выполнения → Выполнить все». Последняя ячейка сама соберёт и скачает
+единый архив для аудита.
 
 Ноутбук получает векторы замороженной GTE-large и проверяет 15 способов
 превратить компоненты в один вектор ответа, восемь классических моделей,
@@ -70,6 +72,9 @@ else:
     if not checkout.exists():
         subprocess.run(["git", "clone", "--depth", "1", "--branch", BRANCH,
                         REPO_URL, str(checkout)], check=True)
+    else:
+        subprocess.run(["git", "-C", str(checkout), "pull", "--ff-only", "origin", BRANCH],
+                       check=True)
     EXP_ROOT = checkout / SUBDIR
 if not (EXP_ROOT / "grid_experiment.py").is_file():
     raise FileNotFoundError(f"Не найдена новая версия опыта: {EXP_ROOT}")
@@ -93,6 +98,8 @@ print("Ответов:", len(bundle.ids), "компонентов:", len(bundle.
 print("Классы:", dict(zip(*np.unique(bundle.y, return_counts=True))))
 print("Размеры пяти частей:", dict(zip(*np.unique(bundle.fold_numbers, return_counts=True))))
 print("GPU доступен:", torch.cuda.is_available())
+if not torch.cuda.is_available():
+    raise RuntimeError("Выберите среду с графическим ускорителем: Среда выполнения → Сменить среду выполнения → T4 GPU. Затем снова нажмите «Выполнить все».")
     """),
     md(r"""
 ## 2. Получение исходных векторов
@@ -216,34 +223,32 @@ if RUN_FULL:
                                       "bootstrap_95_high": "{:+.3f}"}))
     """),
     md(r"""
-## 8. Архив для следующего аудита
+## 8. Отчёт и полный архив для аудита
 
-Последняя ячейка создаёт `component_grid_v2_results.zip` и начинает его
-скачивание. Именно этот один ZIP нужно прислать для следующего аудита. В нём
-есть метрики, вся матрица, 100 внеобучающих прогнозов каждого метода,
-настройки по частям, доверительные интервалы и манифест векторов.
+Последняя ячейка проверяет, что каждый метод дал прогнозы для всех ответов,
+создаёт `REPORT.md` и `REPORT.html`, таблицу метрик по частям и полный
+`component_grid_v2_results.zip`. В архив включены входные данные, все прогнозы,
+векторы, журнал их получения, сведения о запуске и контрольные суммы файлов.
+Скачивание начнётся автоматически. Для следующего аудита пришлите только этот
+архив; при блокировке браузером ссылка останется в выводе ячейки.
     """),
     code(r"""
 if RUN_FULL:
-    import zipfile
-    result_names = [
-        "grid_metrics.csv", "roc_auc_matrix.csv", "grid_oof_predictions.csv",
-        "predefined_comparisons.csv", "grid_fold_details.json", "grid_audit.json",
-        "embeddings_manifest.json",
-    ]
-    zip_path = ARTIFACTS / "component_grid_v2_results.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name in result_names:
-            path = ARTIFACTS / name
-            if path.exists():
-                archive.write(path, arcname=name)
-    print("Архив для аудита:", zip_path, "размер:", zip_path.stat().st_size, "байт")
+    from grid_report import write_audit_package
+    from IPython.display import FileLink
+
+    zip_path = write_audit_package(ARTIFACTS, source_root=EXP_ROOT)
+    print("Полный архив проверен:", zip_path, "размер:",
+          f"{zip_path.stat().st_size / 2**20:.1f} МиБ")
+    display(Markdown((ARTIFACTS / "REPORT.md").read_text(encoding="utf-8")))
+    display(FileLink(str(zip_path)))
     try:
         from google.colab import files
         files.download(str(zip_path))
-    except ImportError:
-        from IPython.display import FileLink
-        display(FileLink(str(zip_path)))
+        print("Скачивание запрошено. Если браузер его заблокировал, нажмите ссылку выше.")
+    except Exception as exc:
+        print("Автоматическое скачивание не удалось:", exc)
+        print("Скачайте архив по ссылке выше или через панель файлов Colab.")
     """),
     md(r"""
 ### Ограничения вывода
