@@ -14,13 +14,21 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, f1_score, log_loss, roc_auc_score
 
-from embeddings import MODEL_ID, MODEL_REVISION
+from embeddings import ENCODERS, MODEL_ID, MODEL_REVISION
 
 
 RESULT_FILES = (
     "grid_metrics.csv", "roc_auc_matrix.csv", "grid_oof_predictions.csv",
     "predefined_comparisons.csv", "grid_fold_details.json", "grid_audit.json",
     "embeddings_manifest.json", "embedding_trace.jsonl", "embeddings.npz",
+)
+ENCODER_FILES = (
+    "encoder_metrics.csv", "encoder_oof_predictions.csv", "encoder_comparisons.csv",
+    "encoder_fold_details.json", "encoder_audit.json",
+)
+BASELINE_FILES = (
+    "baseline_gte/embeddings_manifest.json", "baseline_gte/embedding_trace.jsonl",
+    "baseline_gte/embeddings.npz",
 )
 DATA_FILES = (
     "inputs.no_gold.jsonl", "components.no_gold.jsonl", "labels.csv",
@@ -56,6 +64,8 @@ def write_audit_package(output_dir: Path, *, source_root: Path | None = None) ->
     output_dir = Path(output_dir)
     source_root = Path(source_root) if source_root else Path(__file__).resolve().parent
     missing = [name for name in RESULT_FILES if not (output_dir / name).is_file()]
+    missing += [name for name in ENCODER_FILES if not (output_dir / name).is_file()]
+    missing += [name for name in BASELINE_FILES if not (output_dir / name).is_file()]
     missing += [f"data/{name}" for name in DATA_FILES if not (source_root / "data" / name).is_file()]
     if missing:
         raise FileNotFoundError("Неполный опыт, нельзя создать архив: " + ", ".join(missing))
@@ -63,12 +73,24 @@ def write_audit_package(output_dir: Path, *, source_root: Path | None = None) ->
     metrics = pd.read_csv(output_dir / "grid_metrics.csv")
     predictions = pd.read_csv(output_dir / "grid_oof_predictions.csv")
     comparisons = pd.read_csv(output_dir / "predefined_comparisons.csv")
+    encoder_metrics = pd.read_csv(output_dir / "encoder_metrics.csv")
+    encoder_predictions = pd.read_csv(output_dir / "encoder_oof_predictions.csv")
+    encoder_comparisons = pd.read_csv(output_dir / "encoder_comparisons.csv")
     audit = json.loads((output_dir / "grid_audit.json").read_text(encoding="utf-8"))
     emb_meta = json.loads((output_dir / "embeddings_manifest.json").read_text(encoding="utf-8"))
+    gte_meta = json.loads((output_dir / "baseline_gte" / "embeddings_manifest.json").read_text(encoding="utf-8"))
     if emb_meta.get("data_signature") != audit["dataset_signature"]:
         raise ValueError("Векторы и обучение относятся к разным версиям данных")
     if emb_meta.get("model_id") != MODEL_ID or emb_meta.get("revision") != MODEL_REVISION:
         raise ValueError("Модель векторов не совпадает с закреплённой версией")
+    gte_profile = ENCODERS["gte_large"]
+    if (gte_meta.get("data_signature") != audit["dataset_signature"]
+            or gte_meta.get("model_id") != gte_profile.model_id
+            or gte_meta.get("revision") != gte_profile.revision):
+        raise ValueError("Контрольные GTE-векторы не совпадают с данными или закреплённой моделью")
+    if (gte_meta.get("component_order") != emb_meta.get("component_order")
+            or gte_meta.get("response_order") != emb_meta.get("response_order")):
+        raise ValueError("Порядок ответов или компонентов различается между кодировщиками")
     expected_methods = int(audit["n_methods"])
     expected_answers = int(audit["n_answers"])
     if len(metrics) != expected_methods or metrics.method.nunique() != expected_methods:
@@ -92,14 +114,18 @@ def write_audit_package(output_dir: Path, *, source_root: Path | None = None) ->
             or not np.array_equal(expected_labels.sort_index().to_numpy(),
                                   actual_labels.sort_index().to_numpy())):
         raise ValueError("Метки прогнозов не совпадают с приложенными данными")
-    with np.load(output_dir / "embeddings.npz") as vectors:
-        dimension = int(emb_meta["embedding_dim"])
-        for name, count in (("context", len(emb_meta["component_order"])),
-                            ("triple", len(emb_meta["component_order"])),
-                            ("answer_cls", expected_answers)):
-            array = vectors[name]
-            if array.shape != (count, dimension) or not np.isfinite(array).all():
-                raise ValueError(f"Неверный массив векторов: {name}")
+    for vector_path, vector_meta in (
+        (output_dir / "embeddings.npz", emb_meta),
+        (output_dir / "baseline_gte" / "embeddings.npz", gte_meta),
+    ):
+        with np.load(vector_path) as vectors:
+            dimension = int(vector_meta["embedding_dim"])
+            for name, count in (("context", len(vector_meta["component_order"])),
+                                ("triple", len(vector_meta["component_order"])),
+                                ("answer_cls", expected_answers)):
+                array = vectors[name]
+                if array.shape != (count, dimension) or not np.isfinite(array).all():
+                    raise ValueError(f"Неверный массив векторов {vector_path.name}: {name}")
     for row in metrics.to_dict("records"):
         group = predictions[predictions.method == row["method"]]
         y = group.gold.to_numpy(dtype=int)
@@ -111,6 +137,16 @@ def write_audit_package(output_dir: Path, *, source_root: Path | None = None) ->
         for metric, value in recalculated.items():
             if not np.isclose(row[metric], value, rtol=0, atol=1e-6):
                 raise ValueError(f"Метрика {metric} метода {row['method']} не совпадает с прогнозами")
+    if encoder_predictions.duplicated(["method", "source_id"]).any():
+        raise ValueError("Повторный прогноз в сравнении кодировщиков")
+    if not encoder_predictions.groupby("method").source_id.nunique().eq(expected_answers).all():
+        raise ValueError("Неполные прогнозы в сравнении кодировщиков")
+    for row in encoder_metrics.to_dict("records"):
+        group = encoder_predictions[encoder_predictions.method == row["method"]]
+        y = group.gold.to_numpy(dtype=int)
+        p = group.probability.to_numpy(dtype=float)
+        if not np.isclose(row["ROC_AUC"], roc_auc_score(y, p), rtol=0, atol=1e-6):
+            raise ValueError(f"ROC-AUC кодировщика не совпал: {row['method']}")
 
     fold_rows = []
     for (method, fold), group in predictions.groupby(["method", "fold"], sort=True):
@@ -135,8 +171,9 @@ def write_audit_package(output_dir: Path, *, source_root: Path | None = None) ->
     fold_summary = fold_metrics[fold_metrics.method.isin(chosen)].sort_values(["method", "fold"])
     commit = _git_commit(source_root)
     run_manifest = {
-        "schema": "component-grid-audit-v1", "git_commit": commit,
+        "schema": "component-grid-audit-v2", "git_commit": commit,
         "model_id": MODEL_ID, "model_revision": MODEL_REVISION,
+        "encoders": {"primary": emb_meta, "baseline": gte_meta},
         "python": sys.version.split()[0], "n_answers": expected_answers,
         "n_methods": expected_methods, "dataset_signature": audit["dataset_signature"],
         "embeddings_manifest": emb_meta,
@@ -144,12 +181,21 @@ def write_audit_package(output_dir: Path, *, source_root: Path | None = None) ->
     }
 
     sections = [
-        "# Отчёт по опыту 2.1: компоненты и детекция галлюцинаций",
+        "# Отчёт по опыту 2.2: компоненты и детекция галлюцинаций",
         f"**Ответов:** {expected_answers}; **методов:** {expected_methods}; "
         f"**модель векторов:** `{MODEL_ID}` (`{MODEL_REVISION}`); "
         f"**коммит кода:** `{commit or 'не определён'}`.",
         "Главная метрика — ROC-AUC (площадь под кривой различения классов). "
         "Каждому ответу присвоен прогноз моделью, которая не обучалась на метке этого ответа.",
+        "## Основная проверка гипотезы и сравнение кодировщиков",
+        _table(encoder_comparisons),
+        "Строка `primary` сравнивает одну и ту же логистическую модель на 13 признаках "
+        "с той же моделью после добавления Qwen3-векторов. GTE-large использует те же "
+        "тексты компонентов. `negative_control` сравнивает настоящие Qwen3-векторы с "
+        "векторами, случайно переставленными между ответами.",
+        _table(encoder_metrics, ["method", "description", "ROC_AUC", "PR_AUC",
+                                 "log_loss", "F1_at_0.5", "coverage"]),
+        "Все остальные 139 сочетаний ниже являются разведочным перебором.",
         "## Лучшие 20 методов по ROC-AUC",
         _table(top, ["method", "data_description", "model_description", "ROC_AUC",
                      "PR_AUC", "log_loss", "F1_at_0.5", "coverage"], 20),
@@ -174,8 +220,11 @@ def write_audit_package(output_dir: Path, *, source_root: Path | None = None) ->
         "по нему можно пересчитать все метрики.",
         "- `fold_metrics.csv` и `grid_fold_details.json` — разбивка и настройки по частям.",
         "- `predefined_comparisons.csv` — заранее выбранные парные разницы и интервалы.",
+        "- `encoder_metrics.csv`, `encoder_oof_predictions.csv` и "
+        "`encoder_comparisons.csv` — основная проверка, сравнение Qwen3/GTE и контроль "
+        "с переставленными векторами.",
         "- `embeddings.npz`, `embedding_trace.jsonl`, `embeddings_manifest.json` — "
-        "векторы, исходные фрагменты и сведения о модели.",
+        "векторы, точные входы, их длины и сведения о модели.",
         "- `data/` — точная копия входного набора; `run_manifest.json` — версия кода, "
         "модели и контрольные суммы файлов.",
         "## Ограничения",
@@ -187,17 +236,19 @@ def write_audit_package(output_dir: Path, *, source_root: Path | None = None) ->
     (output_dir / "REPORT.md").write_text(report, encoding="utf-8")
     # HTML открывается локально без установленных библиотек и интернета.
     html_sections = [
-        "<!doctype html><html lang='ru'><meta charset='utf-8'><title>Отчёт по опыту 2.1</title>",
+        "<!doctype html><html lang='ru'><meta charset='utf-8'><title>Отчёт по опыту 2.2</title>",
         "<style>body{font:16px system-ui;max-width:1180px;margin:2rem auto;padding:0 1rem;"
         "line-height:1.5;color:#17212b}table{border-collapse:collapse;display:block;overflow:auto}"
         "th,td{padding:.35rem .6rem;border:1px solid #ccd4dd;text-align:left}"
         "th{background:#eaf1f8}tr:nth-child(even){background:#f8fafc}code{background:#eef2f6}</style>",
-        "<h1>Отчёт по опыту 2.1</h1>",
+        "<h1>Отчёт по опыту 2.2</h1>",
         f"<p>Ответов: {expected_answers}; методов: {expected_methods}; "
         f"модель: <code>{html.escape(MODEL_ID)}</code>; "
         f"коммит: <code>{html.escape(commit or 'не определён')}</code>.</p>",
     ]
     for title, frame in [
+        ("Основные сравнения", encoder_comparisons),
+        ("Метрики кодировщиков", encoder_metrics),
         ("Лучшие 20 методов", top.head(20)), ("Контрольные методы", baselines),
         ("Заранее выбранные сравнения", comparisons),
         ("Метрики по частям", fold_summary), ("Уверенные ошибки", hard),
@@ -209,14 +260,16 @@ def write_audit_package(output_dir: Path, *, source_root: Path | None = None) ->
                          "Полные таблицы и исходные прогнозы лежат рядом в архиве.</p></html>")
     (output_dir / "REPORT.html").write_text("\n".join(html_sections), encoding="utf-8")
 
-    paths = {name: output_dir / name for name in (*RESULT_FILES, "fold_metrics.csv", "REPORT.md", "REPORT.html")}
+    paths = {name: output_dir / name for name in (*RESULT_FILES, *ENCODER_FILES,
+                                                   *BASELINE_FILES,
+                                                   "fold_metrics.csv", "REPORT.md", "REPORT.html")}
     paths.update({f"data/{name}": source_root / "data" / name for name in DATA_FILES})
     for name, path in paths.items():
         run_manifest["files"][name] = {"bytes": path.stat().st_size,
                                          "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     manifest_path = output_dir / "run_manifest.json"
     manifest_path.write_text(json.dumps(run_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    archive_path = output_dir / "component_grid_v2_results.zip"
+    archive_path = output_dir / "component_qwen3_4b_results.zip"
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED,
                          compresslevel=6, allowZip64=True) as archive:
         for name, path in (*paths.items(), ("run_manifest.json", manifest_path)):

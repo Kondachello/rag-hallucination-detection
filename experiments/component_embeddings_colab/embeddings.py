@@ -1,11 +1,11 @@
-"""Замороженный GTE-large: позиции компонентов, длина и кэш векторов."""
+"""Два замороженных кодировщика и одинаковые тексты компонентов для сравнения."""
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import re
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,278 +13,317 @@ import numpy as np
 
 from data_io import Bundle, ROOT, component_key
 
-MODEL_ID = "Alibaba-NLP/gte-large-en-v1.5"
-MODEL_REVISION = "104333d6af6f97649377c2afbde10a7704870c7b"
-MAX_TOKENS = 8192
+
+@dataclass(frozen=True)
+class EncoderProfile:
+    key: str
+    model_id: str
+    revision: str
+    dimension: int
+    pooling: str
+    max_tokens: int = 8192
+    trust_remote_code: bool = False
 
 
-def triple_parts(text: str) -> dict[str, tuple[int, int] | str]:
-    """Разбирает сохранённую направленную тройку и её точные символьные позиции."""
-    match = re.fullmatch(r"subject: (.*?); predicate: (.*?); object: (.*)", text, flags=re.DOTALL)
+ENCODERS = {
+    "qwen3_4b": EncoderProfile(
+        key="qwen3_4b", model_id="Qwen/Qwen3-Embedding-4B",
+        revision="5cf2132abc99cad020ac570b19d031efec650f2b",
+        dimension=2560, pooling="last", max_tokens=8192),
+    "gte_large": EncoderProfile(
+        key="gte_large", model_id="Alibaba-NLP/gte-large-en-v1.5",
+        revision="104333d6af6f97649377c2afbde10a7704870c7b",
+        dimension=1024, pooling="cls", max_tokens=8192, trust_remote_code=True),
+}
+PRIMARY_ENCODER = "qwen3_4b"
+BASELINE_ENCODER = "gte_large"
+MODEL_ID = ENCODERS[PRIMARY_ENCODER].model_id
+MODEL_REVISION = ENCODERS[PRIMARY_ENCODER].revision
+MAX_TOKENS = ENCODERS[PRIMARY_ENCODER].max_tokens
+PROMPT_VERSION = "component-target-v1-no-reference-context"
+
+
+def triple_parts(text: str) -> dict[str, str]:
+    match = re.fullmatch(r"subject: (.*?); predicate: (.*?); object: (.*)", text,
+                         flags=re.DOTALL)
     if not match or any(not match.group(i).strip() for i in (1, 2, 3)):
         raise ValueError(f"Неправильная строка тройки: {text!r}")
-    return {
-        "subject": match.group(1), "predicate": match.group(2), "object": match.group(3),
-        "subject_span": match.span(1), "predicate_span": match.span(2),
-        "object_span": match.span(3),
-    }
+    return {"subject": match.group(1), "predicate": match.group(2),
+            "object": match.group(3)}
 
 
-def norm_name(value: str) -> str:
-    return " ".join(value.casefold().split())
-
-
-@dataclass
-class Job:
-    first: str
-    second: str | None
-    # (вид результата, component_id/source_id, номер текстовой части, start, end)
-    targets: list[tuple[str, str | int, int, int | None, int | None]]
+@dataclass(frozen=True)
+class TextJob:
+    text: str
+    kind: str
+    key: str | int
     note: str
 
 
-def make_jobs(bundle: Bundle) -> tuple[list[Job], dict]:
-    jobs = []
-    per_sid: dict[int, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
-    for row in bundle.components:
-        per_sid[int(row["source_id"])][row["component_type"]].append(row)
-    fallback_answer = 0
-    fallback_triple = 0
-    linked_triple_mentions = 0
+INSTRUCTIONS = {
+    "entity": "Represent the target entity as it is used in the answer. Capture its semantic role and surrounding meaning. Do not assess factual support.",
+    "relation": "Represent the target directed relation as it is used in the answer. Preserve the subject, predicate, object and direction. Do not assess factual support.",
+    "claim": "Represent the semantic content of the factual claim. Do not assess factual support.",
+    "answer": "Represent the semantic content of the complete answer. Do not assess factual support.",
+}
+
+
+def _query(instruction: str, body: str) -> str:
+    return f"Instruct: {instruction}\nQuery: {body.strip()}"
+
+
+def _component_prompt(component: dict, answer: str, *, contextual: bool) -> str:
+    kind, value = component["component_type"], component["embedding_text"].strip()
+    if kind == "entity":
+        body = (f"Answer:\n{answer}\n\nTarget entity:\n{value}" if contextual
+                else f"Entity:\n{value}")
+    elif kind == "relation":
+        parts = triple_parts(value)
+        triple = (f"Subject: {parts['subject']}\nPredicate: {parts['predicate']}\n"
+                  f"Object: {parts['object']}")
+        body = (f"Answer:\n{answer}\n\nTarget directed relation:\n{triple}" if contextual
+                else f"Directed relation:\n{triple}")
+    elif kind == "claim":
+        body = f"Claim:\n{value}"
+    else:
+        raise ValueError(kind)
+    return _query(INSTRUCTIONS[kind], body)
+
+
+def make_jobs(bundle: Bundle) -> tuple[list[TextJob], dict]:
+    """Строит два представления компонента без опорного контекста."""
+    jobs: list[TextJob] = []
+    for component in bundle.components:
+        sid = int(component["source_id"])
+        answer = bundle.by_id[sid]["answer"]
+        key = component_key(component)
+        jobs.append(TextJob(_component_prompt(component, answer, contextual=True),
+                            "context", key, f"context:{key}"))
+        jobs.append(TextJob(_component_prompt(component, answer, contextual=False),
+                            "triple", key, f"isolated:{key}"))
     for sid in bundle.ids:
         answer = bundle.by_id[sid]["answer"]
-        rows = per_sid[sid]
-        answer_targets = [("answer_cls", sid, 0, None, None)]
-        for ent in rows["entity"]:
-            if ent["answer_start"] is None:
-                fallback_answer += 1
-                name = ent["embedding_text"]
-                jobs.append(Job(name, None, [("context", component_key(ent), 0, 0, len(name))],
-                                f"entity_name_fallback:{ent['component_id']}"))
-            else:
-                answer_targets.append(("context", component_key(ent), 0,
-                                       int(ent["answer_start"]), int(ent["answer_end"])))
-        jobs.append(Job(answer, None, answer_targets, f"answer:{sid}"))
-        entity_names: dict[str, list[str]] = defaultdict(list)
-        for ent in rows["entity"]:
-            entity_names[norm_name(ent["embedding_text"])].append(component_key(ent))
-        ambiguous = {name: values for name, values in entity_names.items() if len(values) > 1}
-        if ambiguous:
-            raise ValueError(f"Нельзя однозначно связать конец тройки с сущностью {sid}: {ambiguous}")
-        triple_hits: dict[str, int] = defaultdict(int)
-        for rel in rows["relation"]:
-            cid = component_key(rel)
-            triple = rel["embedding_text"]
-            parts = triple_parts(triple)
-            jobs.append(Job(answer, triple,
-                            [("context", cid, 1, *parts["predicate_span"])],
-                            f"answer_plus_triple:{cid}"))
-            targets = [("triple", cid, 0, *parts["predicate_span"])]
-            for name, span_name in (("subject", "subject_span"), ("object", "object_span")):
-                for ent_id in entity_names.get(norm_name(str(parts[name])), []):
-                    targets.append(("triple_entity", ent_id, 0, *parts[span_name]))
-                    triple_hits[ent_id] += 1
-                    linked_triple_mentions += 1
-            jobs.append(Job(triple, None, targets, f"triple_only:{cid}"))
-        for ent in rows["entity"]:
-            cid = component_key(ent)
-            if triple_hits[cid] == 0:
-                fallback_triple += 1
-                name = ent["embedding_text"]
-                jobs.append(Job(name, None, [("triple_entity", cid, 0, 0, len(name))],
-                                f"triple_entity_name_fallback:{cid}"))
-        for claim in rows["claim"]:
-            cid = component_key(claim)
-            jobs.append(Job(claim["embedding_text"], None,
-                            [("context", cid, 0, None, None),
-                             ("triple", cid, 0, None, None)], f"claim:{cid}"))
+        jobs.append(TextJob(_query(INSTRUCTIONS["answer"], f"Answer:\n{answer}"),
+                            "answer_cls", sid, f"answer:{sid}"))
     return jobs, {
-        "answer_entity_fallbacks": fallback_answer,
-        "triple_entity_fallbacks": fallback_triple,
-        "triple_entity_linked_mentions": linked_triple_mentions,
-        "job_count": len(jobs),
+        "job_count": len(jobs), "context_jobs": len(bundle.components),
+        "isolated_jobs": len(bundle.components), "answer_jobs": len(bundle.ids),
+        "reference_context_in_prompts": False, "prompt_version": PROMPT_VERSION,
     }
 
 
 def example_prompts(bundle: Bundle) -> dict[str, str]:
     jobs, _ = make_jobs(bundle)
-    pair = next(j for j in jobs if j.second is not None)
-    claim = next(j for j in jobs if j.note.startswith("claim:"))
-    return {"answer": pair.first, "triple": pair.second or "", "claim": claim.first,
-            "relation_predicate": pair.second[pair.targets[0][3]:pair.targets[0][4]]}
+    examples = {}
+    for component_type in ("entity", "relation", "claim"):
+        component = next(row for row in bundle.components
+                         if row["component_type"] == component_type)
+        key = component_key(component)
+        examples[f"{component_type}_context"] = next(
+            job.text for job in jobs if job.kind == "context" and job.key == key)
+        examples[f"{component_type}_isolated"] = next(
+            job.text for job in jobs if job.kind == "triple" and job.key == key)
+    examples["answer"] = next(job.text for job in jobs if job.kind == "answer_cls")
+    return examples
 
 
 def _unit(vector: np.ndarray) -> np.ndarray:
-    size = float(np.linalg.norm(vector))
-    if not np.isfinite(size) or size <= 0:
+    norm = float(np.linalg.norm(vector))
+    if not np.isfinite(norm) or norm <= 0:
         raise ValueError("Получен пустой или некорректный вектор")
-    return (vector / size).astype(np.float32)
+    return (vector / norm).astype(np.float32)
 
 
-def encode_jobs(jobs: list[Job], tokenizer, model, *, device: str, batch_size: int = 16,
-                progress: bool = True) -> tuple[dict[str, dict], list[dict]]:
-    """Поддерживает также тестовые токенизатор и модель без сетевого доступа."""
+def _tokenize(tokenizer, texts: list[str], profile: EncoderProfile):
+    tokens = tokenizer(texts, padding=True, truncation=False, return_tensors="pt",
+                       add_special_tokens=True)
+    lengths = tokens["attention_mask"].sum(dim=1).tolist()
+    if any(length > profile.max_tokens for length in lengths):
+        bad = [(i, int(length)) for i, length in enumerate(lengths)
+               if length > profile.max_tokens]
+        raise ValueError(f"Вход длиннее {profile.max_tokens} токенов; усечение запрещено: {bad[:4]}")
+    return tokens, [int(length) for length in lengths]
+
+
+def _forward_vectors(tokenizer, model, texts: list[str], profile: EncoderProfile,
+                     device: str) -> tuple[np.ndarray, list[int]]:
     import torch
-    from tqdm.auto import tqdm
-
-    model.eval()
-    model.to(device)
-    result: dict[str, dict] = {"context": {}, "triple": {}, "triple_entity": {}, "answer_cls": {}}
-    trace = []
-    # В пачке либо одиночные тексты, либо пары: sequence_ids тогда однозначен.
-    for is_pair in (False, True):
-        selected = [j for j in jobs if (j.second is not None) == is_pair]
-        selected.sort(key=lambda j: len(j.first) + len(j.second or ""))
-        iterator = range(0, len(selected), batch_size)
-        if progress:
-            iterator = tqdm(iterator, desc="Пары" if is_pair else "Одиночные тексты")
-        for start in iterator:
-            batch = selected[start:start + batch_size]
-            first = [j.first for j in batch]
-            second = [j.second for j in batch] if is_pair else None
-            tokens = tokenizer(first, second, padding=True, truncation=False,
-                               return_offsets_mapping=True, return_tensors="pt")
-            lengths = tokens["attention_mask"].sum(dim=1).tolist()
-            if any(n > MAX_TOKENS for n in lengths):
-                bad = [(j.note, n) for j, n in zip(batch, lengths) if n > MAX_TOKENS]
-                raise ValueError(f"Вход длиннее {MAX_TOKENS} токенов, усечение запрещено: {bad[:4]}")
-            offsets = tokens.pop("offset_mapping").cpu().numpy()
-            seq_ids = [tokens.sequence_ids(i) for i in range(len(batch))]
-            inputs = {k: v.to(device) for k, v in tokens.items()}
-            with torch.inference_mode():
-                hidden = model(**inputs).last_hidden_state.detach().float().cpu().numpy()
-            for i, job in enumerate(batch):
-                valid = int(lengths[i])
-                for kind, key, part, left, right in job.targets:
-                    if left is None:
-                        vec = hidden[i, 0]
-                        positions = [0]
-                    else:
-                        positions = [p for p in range(valid)
-                                     if seq_ids[i][p] == part and offsets[i, p, 1] > left
-                                     and offsets[i, p, 0] < right]
-                        if not positions:
-                            raise ValueError(f"Не найдены токены {job.note}, {kind}, {left}:{right}")
-                        vec = hidden[i, positions].mean(axis=0)
-                    result[kind].setdefault(key, []).append(_unit(vec))
-                    trace.append({"job": job.note, "kind": kind, "key": key,
-                                  "part": part, "char_span": [left, right],
-                                  "token_positions": positions, "tokens": valid,
-                                  "text_sha256": hashlib.sha256(
-                                      (job.first + "\x00" + (job.second or "")).encode()).hexdigest()})
-    return result, trace
+    tokens, lengths = _tokenize(tokenizer, texts, profile)
+    inputs = {name: value.to(device) for name, value in tokens.items()}
+    with torch.inference_mode():
+        hidden = model(**inputs).last_hidden_state
+        pooled = hidden[:, -1] if profile.pooling == "last" else hidden[:, 0]
+        vectors = pooled.float().cpu().numpy()
+    return vectors, lengths
 
 
-def _batch_candidates(requested: int | None, device: str) -> list[int]:
-    """Большие пакеты для скорости с автоматическим откатом при нехватке памяти."""
+def _batch_candidates(profile: EncoderProfile, device: str) -> list[int]:
+    if device == "cpu":
+        return [1] if profile.key == "qwen3_4b" else [8]
+    return ([8, 4, 2, 1] if profile.key == "qwen3_4b"
+            else [128, 96, 64, 48, 32, 24, 16, 8, 4, 2, 1])
+
+
+def _choose_batch(jobs: list[TextJob], tokenizer, model, profile: EncoderProfile,
+                  device: str, requested: int | None) -> tuple[int, list[dict]]:
     if requested is not None:
         if requested < 1:
             raise ValueError("batch_size должен быть положительным")
-        return [int(requested)]
+        candidates = [int(requested)]
+    else:
+        candidates = _batch_candidates(profile, device)
+    scanned = tokenizer([job.text for job in jobs], padding=False, truncation=False,
+                        add_special_tokens=True, return_length=True)
+    length_values = scanned.get("length")
+    lengths = ([int(value) for value in length_values] if length_values is not None
+               else [len(ids) for ids in scanned["input_ids"]])
+    too_long = [(jobs[i].note, length) for i, length in enumerate(lengths)
+                if length > profile.max_tokens]
+    if too_long:
+        raise ValueError(f"Вход длиннее {profile.max_tokens} токенов; усечение запрещено: "
+                         f"{too_long[:4]}")
+    order = np.argsort(lengths)[::-1]
+    longest = [jobs[int(index)] for index in order]
+    del scanned
     if device == "cpu":
-        return [8]
+        return candidates[0], [{"batch_size": candidates[0], "status": "cpu_default"}]
     import torch
-    total_gib = torch.cuda.get_device_properties(0).total_memory / 2**30
-    if total_gib >= 14:
-        return [128, 96, 64, 48, 32, 24, 16, 8, 4, 2, 1]
-    if total_gib >= 10:
-        return [64, 48, 32, 24, 16, 8, 4, 2, 1]
-    return [32, 24, 16, 8, 4, 2, 1]
+    attempts = []
+    total = int(torch.cuda.get_device_properties(0).total_memory)
+    for candidate in candidates:
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        try:
+            _forward_vectors(tokenizer, model, [job.text for job in longest[:candidate]],
+                             profile, device)
+            torch.cuda.synchronize()
+            peak = int(torch.cuda.max_memory_reserved())
+            attempts.append({"batch_size": candidate, "status": "ok",
+                             "peak_reserved_bytes": peak})
+            if peak <= 0.90 * total or candidate == 1:
+                return candidate, attempts
+            attempts[-1]["status"] = "over_90_percent"
+        except RuntimeError as error:
+            if "out of memory" not in str(error).lower():
+                raise
+            attempts.append({"batch_size": candidate, "status": "out_of_memory"})
+        torch.cuda.empty_cache()
+    raise RuntimeError("Не удалось подобрать безопасный размер пакета")
+
+
+def encode_jobs(jobs: list[TextJob], tokenizer, model, *, profile: EncoderProfile,
+                device: str, batch_size: int, progress: bool = True):
+    from tqdm.auto import tqdm
+    model.eval()
+    result = {"context": {}, "triple": {}, "answer_cls": {}}
+    trace = []
+    ordered = sorted(jobs, key=lambda job: len(job.text))
+    iterator = range(0, len(ordered), batch_size)
+    if progress:
+        iterator = tqdm(iterator, desc=f"Векторы {profile.key}")
+    for start in iterator:
+        batch = ordered[start:start + batch_size]
+        vectors, lengths = _forward_vectors(tokenizer, model,
+                                            [job.text for job in batch], profile, device)
+        for job, vector, length in zip(batch, vectors, lengths):
+            if job.key in result[job.kind]:
+                raise ValueError(f"Повторный ключ: {job.kind}/{job.key}")
+            result[job.kind][job.key] = _unit(vector)
+            trace.append({"job": job.note, "kind": job.kind, "key": job.key,
+                          "tokens": length, "pooling": profile.pooling,
+                          "text": job.text,
+                          "text_sha256": hashlib.sha256(job.text.encode()).hexdigest()})
+    return result, trace
 
 
 def extract_embeddings(bundle: Bundle, *, output_dir: Path | None = None,
-                       batch_size: int | None = None, force: bool = False) -> dict:
-    """Скачивает закреплённую модель только при первом вызове, сохраняет кэш."""
+                       encoder: str = PRIMARY_ENCODER, batch_size: int | None = None,
+                       force: bool = False) -> dict:
+    """Получает и сохраняет векторы одного закреплённого кодировщика."""
     import torch
     from transformers import AutoModel, AutoTokenizer
 
-    output_dir = output_dir or ROOT / "artifacts"
+    if encoder not in ENCODERS:
+        raise ValueError(f"Неизвестный кодировщик: {encoder}")
+    profile = ENCODERS[encoder]
+    output_dir = Path(output_dir or ROOT / "artifacts")
     output_dir.mkdir(exist_ok=True, parents=True)
     cache = output_dir / "embeddings.npz"
     meta_path = output_dir / "embeddings_manifest.json"
     trace_path = output_dir / "embedding_trace.jsonl"
-    fingerprint = hashlib.sha256((bundle.signature + MODEL_ID + MODEL_REVISION
-                                  + "v3-gte-large-fp16-auto-batch").encode()).hexdigest()
+    fingerprint = hashlib.sha256((bundle.signature + profile.model_id + profile.revision
+                                  + PROMPT_VERSION).encode()).hexdigest()
     if cache.exists() and meta_path.exists() and trace_path.exists() and not force:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if meta.get("fingerprint") == fingerprint:
             with np.load(cache) as loaded:
-                arrays = {key: loaded[key] for key in ("context", "triple", "answer_cls")}
-            dimension = int(meta.get("embedding_dim", 0))
-            expected_rows = (len(bundle.components), len(bundle.components), len(bundle.ids))
-            if dimension > 0 and all(value.shape == (rows, dimension)
-                                     and np.isfinite(value).all()
-                                     for value, rows in zip(arrays.values(), expected_rows)):
+                arrays = {name: loaded[name] for name in ("context", "triple", "answer_cls")}
+            expected = ((len(bundle.components), profile.dimension),
+                        (len(bundle.components), profile.dimension),
+                        (len(bundle.ids), profile.dimension))
+            if all(array.shape == shape and np.isfinite(array).all()
+                   for array, shape in zip(arrays.values(), expected)):
                 return arrays | {"manifest": meta}
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION,
-                                               use_fast=True, trust_remote_code=True)
-    if not tokenizer.is_fast:
-        raise RuntimeError("Для символьных позиций нужен быстрый токенизатор")
+
+    tokenizer = AutoTokenizer.from_pretrained(profile.model_id, revision=profile.revision,
+                                               trust_remote_code=profile.trust_remote_code,
+                                               use_fast=True)
+    tokenizer.padding_side = "left" if profile.pooling == "last" else "right"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
-    model = AutoModel.from_pretrained(
-        MODEL_ID, revision=MODEL_REVISION, trust_remote_code=True,
-        use_safetensors=True, torch_dtype=dtype)
+    load_kwargs = dict(revision=profile.revision, trust_remote_code=profile.trust_remote_code,
+                       use_safetensors=True, torch_dtype=dtype, low_cpu_mem_usage=True)
+    if profile.key == "qwen3_4b":
+        load_kwargs["attn_implementation"] = "sdpa"
+    model = AutoModel.from_pretrained(profile.model_id, **load_kwargs).to(device).eval()
     dimension = int(model.config.hidden_size)
+    if dimension != profile.dimension:
+        raise ValueError(f"Ожидалось {profile.dimension} координат, получено {dimension}")
     jobs, stats = make_jobs(bundle)
-    attempted_batches = []
-    vectors = trace = None
-    peak_allocated = peak_reserved = 0
-    selected_batch = None
-    for candidate in _batch_candidates(batch_size, device):
-        attempted_batches.append(candidate)
-        if device == "cuda":
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats()
-        try:
-            vectors, trace = encode_jobs(
-                jobs, tokenizer, model, device=device, batch_size=candidate)
-            selected_batch = candidate
-            if device == "cuda":
-                peak_allocated = int(torch.cuda.max_memory_allocated())
-                peak_reserved = int(torch.cuda.max_memory_reserved())
-                total = int(torch.cuda.get_device_properties(0).total_memory)
-                if batch_size is None and candidate > 1 and peak_reserved > 0.85 * total:
-                    print(f"Пакет {candidate} занял более 85% GPU; сохраняем запас и пробуем меньше")
-                    vectors = trace = None
-                    continue
-            break
-        except RuntimeError as error:
-            if "out of memory" not in str(error).lower() or batch_size is not None:
-                raise
-            print(f"Пакет {candidate} не поместился в GPU; пробуем меньше")
-            torch.cuda.empty_cache()
-    if vectors is None or trace is None or selected_batch is None:
-        raise RuntimeError("Не удалось подобрать размер пакета для кодировщика")
-    ids = [component_key(r) for r in bundle.components]
-    answer_ids = bundle.ids
-    arrays = {
-        "context": np.stack([vectors["context"][cid][0] for cid in ids]),
-        "triple": np.stack([
-            np.mean(vectors["triple_entity"][cid], axis=0) if r["component_type"] == "entity"
-            else vectors["triple"][cid][0]
-            for cid, r in zip(ids, bundle.components)
-        ]),
-        "answer_cls": np.stack([vectors["answer_cls"][sid][0] for sid in answer_ids]),
-    }
-    arrays["triple"] = np.stack([_unit(v) for v in arrays["triple"]])
-    if any(a.shape[-1] != dimension or not np.isfinite(a).all() for a in arrays.values()):
-        raise ValueError("Неожиданная размерность или нечисловой вектор GTE-large")
-    np.savez_compressed(cache, **arrays)
-    trace_path.write_text(
-        "\n".join(json.dumps(row, ensure_ascii=False) for row in trace) + "\n", encoding="utf-8")
+    selected_batch, attempts = _choose_batch(jobs, tokenizer, model, profile, device,
+                                              batch_size)
+    if device == "cuda":
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+    vectors, trace = encode_jobs(jobs, tokenizer, model, profile=profile, device=device,
+                                 batch_size=selected_batch)
+    peak_allocated = int(torch.cuda.max_memory_allocated()) if device == "cuda" else 0
+    peak_reserved = int(torch.cuda.max_memory_reserved()) if device == "cuda" else 0
     gpu_total = (int(torch.cuda.get_device_properties(0).total_memory)
                  if device == "cuda" else None)
-    meta = {"fingerprint": fingerprint, "model_id": MODEL_ID, "revision": MODEL_REVISION,
-            "data_signature": bundle.signature, "device": device,
-            "precision": "float16" if device == "cuda" else "float32",
-            "embedding_dim": dimension, "batch_size": selected_batch,
-            "attempted_batch_sizes": attempted_batches, "gpu_total_bytes": gpu_total,
-            "gpu_peak_allocated_bytes": peak_allocated,
-            "gpu_peak_reserved_bytes": peak_reserved,
-            "component_order": ids, "response_order": answer_ids,
-            "normalization": "L2 per component; triple entity average then L2",
-            "encoder": "last_hidden_state span mean or CLS", **stats,
-            "max_observed_tokens": max(row["tokens"] for row in trace)}
+    ids = [component_key(row) for row in bundle.components]
+    arrays = {
+        "context": np.stack([vectors["context"][key] for key in ids]),
+        "triple": np.stack([vectors["triple"][key] for key in ids]),
+        "answer_cls": np.stack([vectors["answer_cls"][sid] for sid in bundle.ids]),
+    }
+    if any(array.shape[1] != dimension or not np.isfinite(array).all()
+           for array in arrays.values()):
+        raise ValueError("Неожиданная размерность или некорректный вектор")
+    np.savez_compressed(cache, **arrays)
+    trace_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in trace) + "\n",
+                          encoding="utf-8")
+    meta = {
+        "fingerprint": fingerprint, "encoder_key": profile.key,
+        "model_id": profile.model_id, "revision": profile.revision,
+        "data_signature": bundle.signature, "prompt_version": PROMPT_VERSION,
+        "reference_context_in_prompts": False, "device": device,
+        "precision": "float16" if device == "cuda" else "float32",
+        "attention_implementation": "sdpa" if profile.key == "qwen3_4b" else "model_default",
+        "pooling": profile.pooling, "embedding_dim": dimension,
+        "max_tokens": profile.max_tokens, "batch_size": selected_batch,
+        "batch_probe_attempts": attempts, "gpu_total_bytes": gpu_total,
+        "gpu_peak_allocated_bytes": peak_allocated,
+        "gpu_peak_reserved_bytes": peak_reserved,
+        "component_order": ids, "response_order": bundle.ids,
+        "normalization": "L2 per vector", "max_observed_tokens": max(x["tokens"] for x in trace),
+        **stats,
+    }
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    del model
+    gc.collect()
+    if device == "cuda":
+        torch.cuda.empty_cache()
     return arrays | {"manifest": meta}

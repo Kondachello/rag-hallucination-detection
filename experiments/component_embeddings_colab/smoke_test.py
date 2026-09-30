@@ -1,4 +1,4 @@
-"""Локальная проверка без скачивания BGE и без полного обучения."""
+"""Локальная проверка без скачивания кодировщиков и без полного обучения."""
 
 from __future__ import annotations
 
@@ -13,60 +13,47 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from data_io import load_bundle
-from embeddings import MAX_TOKENS, encode_jobs, make_jobs, triple_parts
+from embeddings import ENCODERS, encode_jobs, make_jobs, triple_parts
 from experiment import LINEAR_METHODS
 from features import feature_matrix, make_fold_view, padded_tensors
 from models import NEURAL_METHODS, SetDetector, one_step_smoke
 
 
-def check_token_positions(bundle, tokenizer_dir: Path):
-    """Местный BERT-токенизатор проверяет контракт позиций; Colab повторит с BGE."""
+def check_tokenization(bundle, tokenizer_dir: Path):
+    """Доступный локальный токенизатор проверяет полный проход нового интерфейса."""
     import torch
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir), local_files_only=True,
                                               use_fast=True)
-    assert tokenizer.is_fast
     jobs, _ = make_jobs(bundle)
-    for pair in (False, True):
-        selected = [j for j in jobs if (j.second is not None) == pair]
-        for start in range(0, len(selected), 32):
-            batch = selected[start:start + 32]
-            enc = tokenizer([j.first for j in batch],
-                            [j.second for j in batch] if pair else None,
-                            truncation=False, padding=True, return_offsets_mapping=True)
-            for i, job in enumerate(batch):
-                assert len(enc["input_ids"][i]) <= MAX_TOKENS
-                seq = enc.sequence_ids(i)
-                offsets = enc["offset_mapping"][i]
-                for _, _, part, left, right in job.targets:
-                    if left is None:
-                        continue
-                    pos = [p for p, (a, b) in enumerate(offsets)
-                           if seq[p] == part and b > left and a < right]
-                    assert pos, (job.note, left, right)
-    # Проверяем и фактический проход функции извлечения на нескольких разных входах.
+    selected = jobs[:8]
+    enc = tokenizer([job.text for job in selected], truncation=False, padding=True)
+    assert all(len(row) <= ENCODERS["gte_large"].max_tokens for row in enc["input_ids"])
+
     class FakeModel(torch.nn.Module):
-        def forward(self, input_ids, attention_mask, token_type_ids=None):
+        def forward(self, input_ids, attention_mask, token_type_ids=None, **kwargs):
             base = input_ids.float().unsqueeze(-1)
             frequencies = torch.arange(1, 1025, device=base.device).float()
             output = torch.sin(base / frequencies)
             return type("FakeOutput", (), {"last_hidden_state": output})()
 
-    first = [next(j for j in jobs if j.note.startswith(prefix))
-             for prefix in ("answer:", "answer_plus_triple:", "triple_only:", "claim:")]
-    result, trace = encode_jobs(first, tokenizer, FakeModel(), device="cpu", batch_size=2,
-                                progress=False)
-    assert len(trace) >= 6 and all(v for v in result.values() if v)
+    tokenizer.padding_side = "right"
+    first = [next(j for j in jobs if j.kind == kind)
+             for kind in ("context", "triple", "answer_cls")]
+    result, trace = encode_jobs(first, tokenizer, FakeModel(),
+                                profile=ENCODERS["gte_large"], device="cpu",
+                                batch_size=2, progress=False)
+    assert len(trace) == 3 and all(len(v) == 1 for v in result.values())
     return len(jobs)
 
 
 def check_shapes(bundle):
     rng = np.random.default_rng(42)
     embeddings = {
-        "context": rng.normal(size=(len(bundle.components), 1024)).astype(np.float32),
-        "triple": rng.normal(size=(len(bundle.components), 1024)).astype(np.float32),
-        "answer_cls": rng.normal(size=(len(bundle.ids), 1024)).astype(np.float32),
+        "context": rng.normal(size=(len(bundle.components), 2560)).astype(np.float32),
+        "triple": rng.normal(size=(len(bundle.components), 2560)).astype(np.float32),
+        "answer_cls": rng.normal(size=(len(bundle.ids), 2560)).astype(np.float32),
     }
     train_idx = np.where(bundle.fold_numbers != 0)[0]
     test_idx = np.where(bundle.fold_numbers == 0)[0]
@@ -100,13 +87,14 @@ def main():
     args = parser.parse_args()
     bundle = load_bundle()
     jobs, stats = make_jobs(bundle)
-    assert stats["answer_entity_fallbacks"] == 5
-    assert len(jobs) > 2300
+    assert len(jobs) == 2 * len(bundle.components) + len(bundle.ids) == 4870
+    assert stats["reference_context_in_prompts"] is False
+    assert {job.kind for job in jobs} == {"context", "triple", "answer_cls"}
     for relation in (r for r in bundle.components if r["component_type"] == "relation"):
         triple_parts(relation["embedding_text"])
     if args.tokenizer_dir:
-        checked = check_token_positions(bundle, args.tokenizer_dir)
-        print(f"Позиции проверены у {checked} контекстов (локальный BERT-токенизатор)")
+        checked = check_tokenization(bundle, args.tokenizer_dir)
+        print(f"Токенизация проверена у {checked} входов")
     linear, neural = check_shapes(bundle)
     print(f"OK: 100 ответов, 2385 компонентов, {linear} линейных вариантов, "
           f"{neural} нейросетей по одному шагу; полное обучение не запускалось")
