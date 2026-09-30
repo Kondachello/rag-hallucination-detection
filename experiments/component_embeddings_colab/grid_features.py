@@ -20,7 +20,7 @@ DATA_VARIANTS = {
     "D_CONF_PCA_MEAN": "13 признаков + PCA-8 средние E/R/C",
     "D_CONF_PCA_STATS": "13 признаков + PCA-8 среднее, максимум, минимум и разброс",
     "D_CONF_PCA_STATUS": "13 признаков + PCA-8 средние по благоприятным/проблемным/неясным",
-    "D_RAW_MEAN": "Сырые 384-мерные средние E/R/C без подтверждённости",
+    "D_RAW_MEAN": "Сырые полноразмерные средние E/R/C без подтверждённости",
     "D_CONF_RAW_MEAN": "13 признаков + сырые средние E/R/C",
     "D_CONF_RAW_MEANMAX": "13 признаков + сырые средние и максимумы E/R/C",
     "D_CONF_RAW_QUANTILES": "13 признаков + сырые квартили 25/50/75% E/R/C",
@@ -41,35 +41,38 @@ class RawView:
     status: dict[str, list[np.ndarray]]
     cls: np.ndarray
     missing_span: np.ndarray
+    dimension: int
 
 
 def make_raw_view(bundle: Bundle, embeddings: dict, *, source: str = "context") -> RawView:
     if source not in ("context", "triple"):
         raise ValueError(source)
     raw = np.asarray(embeddings[source], dtype=np.float32)
-    if raw.shape != (len(bundle.components), 384):
+    if raw.ndim != 2 or raw.shape[0] != len(bundle.components):
         raise ValueError(f"Неверная форма {source}: {raw.shape}")
+    dimension = int(raw.shape[1])
     id_to_row = {sid: i for i, sid in enumerate(bundle.ids)}
     grouped = {kind: [[] for _ in bundle.ids] for kind in TYPES}
     for j, component in enumerate(bundle.components):
         grouped[component["component_type"]][id_to_row[int(component["source_id"])]].append(j)
     x, status = {}, {}
     for kind in TYPES:
-        x[kind] = [raw[idx].copy() if idx else np.zeros((0, 384), np.float32)
+        x[kind] = [raw[idx].copy() if idx else np.zeros((0, dimension), np.float32)
                    for idx in grouped[kind]]
         choices = STATUSES[kind]
         status[kind] = [np.asarray([choices.index(bundle.components[j]["confirmation"])
                                     for j in idx], dtype=np.int64)
                         for idx in grouped[kind]]
     cls = np.asarray(embeddings["answer_cls"], dtype=np.float32)
-    if cls.shape != (len(bundle.ids), 384):
+    if cls.shape != (len(bundle.ids), dimension):
         raise ValueError(f"Неверная форма answer_cls: {cls.shape}")
     missing_span = np.asarray([
         sum(row["component_type"] == "entity" and row["answer_start"] is None
             for row in bundle.components if int(row["source_id"]) == sid)
         for sid in bundle.ids
     ], dtype=np.float32)[:, None]
-    return RawView(bundle.ids, bundle.q.copy(), x, status, cls.copy(), missing_span)
+    return RawView(bundle.ids, bundle.q.copy(), x, status, cls.copy(), missing_span,
+                   dimension)
 
 
 def confirmation_group(code: int, kind: str) -> int:
@@ -128,7 +131,7 @@ def _quantiles(view: RawView) -> np.ndarray:
         rows = []
         for arr in view.x[kind]:
             rows.append(np.quantile(arr, (0.25, 0.5, 0.75), axis=0).reshape(-1)
-                        if len(arr) else np.zeros(3 * 384, np.float32))
+                        if len(arr) else np.zeros(3 * view.dimension, np.float32))
         chunks.append(np.stack(rows))
     return np.column_stack(chunks).astype(np.float32)
 
@@ -138,7 +141,7 @@ def _top3_outliers(view: RawView) -> np.ndarray:
     for kind in TYPES:
         rows = []
         for arr in view.x[kind]:
-            selected = np.zeros((3, 384), np.float32)
+            selected = np.zeros((3, view.dimension), np.float32)
             mask = np.zeros(3, np.float32)
             if len(arr):
                 distance = np.linalg.norm(arr - arr.mean(0, keepdims=True), axis=1)
@@ -157,6 +160,7 @@ def build_tabular_features(bundle: Bundle, embeddings: dict, train_idx: np.ndarr
         raise ValueError(f"Неизвестное представление: {variant}")
     q = bundle.q.astype(np.float32)
     raw = make_raw_view(bundle, embeddings, source="context")
+    raw_dim = raw.dimension
     counts = _counts(raw.x)
     if variant == "D_CONFIRMATION":
         matrix = q
@@ -174,31 +178,34 @@ def build_tabular_features(bundle: Bundle, embeddings: dict, train_idx: np.ndarr
         else:
             raise AssertionError(variant)
     elif variant == "D_RAW_MEAN":
-        matrix = np.column_stack([_matrix(raw.x, ("mean",), 384), counts])
+        matrix = np.column_stack([_matrix(raw.x, ("mean",), raw_dim), counts])
     elif variant == "D_CONF_RAW_MEAN":
-        matrix = np.column_stack([q, _matrix(raw.x, ("mean",), 384), counts, raw.missing_span])
+        matrix = np.column_stack([q, _matrix(raw.x, ("mean",), raw_dim), counts,
+                                  raw.missing_span])
     elif variant == "D_CONF_RAW_MEANMAX":
-        matrix = np.column_stack([q, _matrix(raw.x, ("mean", "max"), 384), counts,
+        matrix = np.column_stack([q, _matrix(raw.x, ("mean", "max"), raw_dim), counts,
                                   raw.missing_span])
     elif variant == "D_CONF_RAW_QUANTILES":
         matrix = np.column_stack([q, _quantiles(raw), counts, raw.missing_span])
     elif variant == "D_CONF_RAW_STATUS":
-        matrix = np.column_stack([q, _status_matrix(raw, 384), raw.missing_span])
+        matrix = np.column_stack([q, _status_matrix(raw, raw_dim), raw.missing_span])
     elif variant == "D_CONF_RAW_TOP3":
         matrix = np.column_stack([q, _top3_outliers(raw), counts, raw.missing_span])
     elif variant == "D_CONF_CLS":
         matrix = np.column_stack([q, raw.cls])
     elif variant == "D_CONF_RAW_MEAN_CLS":
-        matrix = np.column_stack([q, _matrix(raw.x, ("mean",), 384), raw.cls,
+        matrix = np.column_stack([q, _matrix(raw.x, ("mean",), raw_dim), raw.cls,
                                   counts, raw.missing_span])
     elif variant == "D_CONF_TRIPLE_RAW_MEAN":
         triple = make_raw_view(bundle, embeddings, source="triple")
-        matrix = np.column_stack([q, _matrix(triple.x, ("mean",), 384),
+        matrix = np.column_stack([q, _matrix(triple.x, ("mean",), triple.dimension),
                                   _counts(triple.x), triple.missing_span])
     elif variant == "D_CONF_CONTEXT_TRIPLE":
         triple = make_raw_view(bundle, embeddings, source="triple")
-        context_mean = _matrix(raw.x, ("mean",), 384)
-        triple_mean = _matrix(triple.x, ("mean",), 384)
+        if triple.dimension != raw_dim:
+            raise ValueError("Размерности контекстных и троечных векторов различаются")
+        context_mean = _matrix(raw.x, ("mean",), raw_dim)
+        triple_mean = _matrix(triple.x, ("mean",), raw_dim)
         matrix = np.column_stack([q, context_mean, triple_mean, context_mean - triple_mean,
                                   counts, raw.missing_span])
     else:

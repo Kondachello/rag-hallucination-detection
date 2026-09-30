@@ -32,7 +32,8 @@ def make_fold_view(bundle: Bundle, embeddings: dict, train_indices: np.ndarray,
     ids = bundle.ids
     train_ids = {ids[int(i)] for i in train_indices}
     raw = np.asarray(embeddings[source], dtype=np.float32)
-    assert raw.shape == (len(bundle.components), 384)
+    if raw.ndim != 2 or raw.shape[0] != len(bundle.components) or raw.shape[1] < DIM:
+        raise ValueError(f"Неверная форма {source}: {raw.shape}")
     q_scaler = StandardScaler().fit(bundle.q[train_indices])
     q = q_scaler.transform(bundle.q).astype(np.float32)
     grouped: dict[str, list[list[int]]] = {
@@ -58,7 +59,8 @@ def make_fold_view(bundle: Bundle, embeddings: dict, train_indices: np.ndarray,
                                     for j in group], dtype=np.int64)
                         for group in grouped[kind]]
     cls_raw = np.asarray(embeddings["answer_cls"], dtype=np.float32)
-    assert cls_raw.shape == (len(ids), 384)
+    if cls_raw.shape != (len(ids), raw.shape[1]):
+        raise ValueError(f"Неверная форма answer_cls: {cls_raw.shape}")
     cls = PCA(n_components=DIM, svd_solver="randomized", random_state=42).fit(cls_raw[train_indices]).transform(cls_raw)
     missing_span = np.asarray([
         sum(row["component_type"] == "entity" and row["answer_start"] is None

@@ -1,4 +1,4 @@
-"""Замороженный BERT: позиции компонентов, проверка длины и кэш векторов."""
+"""Замороженный GTE-large: позиции компонентов, длина и кэш векторов."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ import numpy as np
 
 from data_io import Bundle, ROOT, component_key
 
-MODEL_ID = "BAAI/bge-small-en-v1.5"
-MODEL_REVISION = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
-MAX_TOKENS = 512
+MODEL_ID = "Alibaba-NLP/gte-large-en-v1.5"
+MODEL_REVISION = "104333d6af6f97649377c2afbde10a7704870c7b"
+MAX_TOKENS = 8192
 
 
 def triple_parts(text: str) -> dict[str, tuple[int, int] | str]:
@@ -134,6 +134,7 @@ def encode_jobs(jobs: list[Job], tokenizer, model, *, device: str, batch_size: i
     # В пачке либо одиночные тексты, либо пары: sequence_ids тогда однозначен.
     for is_pair in (False, True):
         selected = [j for j in jobs if (j.second is not None) == is_pair]
+        selected.sort(key=lambda j: len(j.first) + len(j.second or ""))
         iterator = range(0, len(selected), batch_size)
         if progress:
             iterator = tqdm(iterator, desc="Пары" if is_pair else "Одиночные тексты")
@@ -174,8 +175,25 @@ def encode_jobs(jobs: list[Job], tokenizer, model, *, device: str, batch_size: i
     return result, trace
 
 
+def _batch_candidates(requested: int | None, device: str) -> list[int]:
+    """Большие пакеты для скорости с автоматическим откатом при нехватке памяти."""
+    if requested is not None:
+        if requested < 1:
+            raise ValueError("batch_size должен быть положительным")
+        return [int(requested)]
+    if device == "cpu":
+        return [8]
+    import torch
+    total_gib = torch.cuda.get_device_properties(0).total_memory / 2**30
+    if total_gib >= 14:
+        return [128, 96, 64, 48, 32, 24, 16, 8, 4, 2, 1]
+    if total_gib >= 10:
+        return [64, 48, 32, 24, 16, 8, 4, 2, 1]
+    return [32, 24, 16, 8, 4, 2, 1]
+
+
 def extract_embeddings(bundle: Bundle, *, output_dir: Path | None = None,
-                       batch_size: int = 16, force: bool = False) -> dict:
+                       batch_size: int | None = None, force: bool = False) -> dict:
     """Скачивает закреплённую модель только при первом вызове, сохраняет кэш."""
     import torch
     from transformers import AutoModel, AutoTokenizer
@@ -186,26 +204,58 @@ def extract_embeddings(bundle: Bundle, *, output_dir: Path | None = None,
     meta_path = output_dir / "embeddings_manifest.json"
     trace_path = output_dir / "embedding_trace.jsonl"
     fingerprint = hashlib.sha256((bundle.signature + MODEL_ID + MODEL_REVISION
-                                  + "v2-normalized-spans-and-cls").encode()).hexdigest()
+                                  + "v3-gte-large-fp16-auto-batch").encode()).hexdigest()
     if cache.exists() and meta_path.exists() and trace_path.exists() and not force:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if meta.get("fingerprint") == fingerprint:
             with np.load(cache) as loaded:
                 arrays = {key: loaded[key] for key in ("context", "triple", "answer_cls")}
-            expected = ((len(bundle.components), 384), (len(bundle.components), 384),
-                        (len(bundle.ids), 384))
-            if all(value.shape == shape and np.isfinite(value).all()
-                   for value, shape in zip(arrays.values(), expected)):
+            dimension = int(meta.get("embedding_dim", 0))
+            expected_rows = (len(bundle.components), len(bundle.components), len(bundle.ids))
+            if dimension > 0 and all(value.shape == (rows, dimension)
+                                     and np.isfinite(value).all()
+                                     for value, rows in zip(arrays.values(), expected_rows)):
                 return arrays | {"manifest": meta}
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION,
-                                               use_fast=True, trust_remote_code=False)
+                                               use_fast=True, trust_remote_code=True)
     if not tokenizer.is_fast:
         raise RuntimeError("Для символьных позиций нужен быстрый токенизатор")
-    model = AutoModel.from_pretrained(MODEL_ID, revision=MODEL_REVISION,
-                                      trust_remote_code=False, use_safetensors=True)
-    jobs, stats = make_jobs(bundle)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    vectors, trace = encode_jobs(jobs, tokenizer, model, device=device, batch_size=batch_size)
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    model = AutoModel.from_pretrained(
+        MODEL_ID, revision=MODEL_REVISION, trust_remote_code=True,
+        use_safetensors=True, torch_dtype=dtype)
+    dimension = int(model.config.hidden_size)
+    jobs, stats = make_jobs(bundle)
+    attempted_batches = []
+    vectors = trace = None
+    peak_allocated = peak_reserved = 0
+    selected_batch = None
+    for candidate in _batch_candidates(batch_size, device):
+        attempted_batches.append(candidate)
+        if device == "cuda":
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+        try:
+            vectors, trace = encode_jobs(
+                jobs, tokenizer, model, device=device, batch_size=candidate)
+            selected_batch = candidate
+            if device == "cuda":
+                peak_allocated = int(torch.cuda.max_memory_allocated())
+                peak_reserved = int(torch.cuda.max_memory_reserved())
+                total = int(torch.cuda.get_device_properties(0).total_memory)
+                if batch_size is None and candidate > 1 and peak_reserved > 0.85 * total:
+                    print(f"Пакет {candidate} занял более 85% GPU; сохраняем запас и пробуем меньше")
+                    vectors = trace = None
+                    continue
+            break
+        except RuntimeError as error:
+            if "out of memory" not in str(error).lower() or batch_size is not None:
+                raise
+            print(f"Пакет {candidate} не поместился в GPU; пробуем меньше")
+            torch.cuda.empty_cache()
+    if vectors is None or trace is None or selected_batch is None:
+        raise RuntimeError("Не удалось подобрать размер пакета для кодировщика")
     ids = [component_key(r) for r in bundle.components]
     answer_ids = bundle.ids
     arrays = {
@@ -218,13 +268,20 @@ def extract_embeddings(bundle: Bundle, *, output_dir: Path | None = None,
         "answer_cls": np.stack([vectors["answer_cls"][sid][0] for sid in answer_ids]),
     }
     arrays["triple"] = np.stack([_unit(v) for v in arrays["triple"]])
-    if any(a.shape[-1] != 384 or not np.isfinite(a).all() for a in arrays.values()):
-        raise ValueError("Неожиданная размерность/нечисловой вектор BGE-small")
+    if any(a.shape[-1] != dimension or not np.isfinite(a).all() for a in arrays.values()):
+        raise ValueError("Неожиданная размерность или нечисловой вектор GTE-large")
     np.savez_compressed(cache, **arrays)
     trace_path.write_text(
         "\n".join(json.dumps(row, ensure_ascii=False) for row in trace) + "\n", encoding="utf-8")
+    gpu_total = (int(torch.cuda.get_device_properties(0).total_memory)
+                 if device == "cuda" else None)
     meta = {"fingerprint": fingerprint, "model_id": MODEL_ID, "revision": MODEL_REVISION,
-            "data_signature": bundle.signature, "device": device, "batch_size": batch_size,
+            "data_signature": bundle.signature, "device": device,
+            "precision": "float16" if device == "cuda" else "float32",
+            "embedding_dim": dimension, "batch_size": selected_batch,
+            "attempted_batch_sizes": attempted_batches, "gpu_total_bytes": gpu_total,
+            "gpu_peak_allocated_bytes": peak_allocated,
+            "gpu_peak_reserved_bytes": peak_reserved,
             "component_order": ids, "response_order": answer_ids,
             "normalization": "L2 per component; triple entity average then L2",
             "encoder": "last_hidden_state span mean or CLS", **stats,

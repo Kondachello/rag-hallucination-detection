@@ -36,10 +36,10 @@ SET_DATA_VARIANTS = {
 }
 
 SET_MODELS = {
-    "set_mean": "Отдельный слой 384→16, затем среднее",
-    "set_max": "Отдельный слой 384→16, затем максимум",
-    "set_meanmax": "Отдельный слой 384→16, затем среднее и максимум",
-    "set_attention": "Обучаемые веса компонентов после слоя 384→16",
+    "set_mean": "Отдельный слой D→32, затем среднее",
+    "set_max": "Отдельный слой D→32, затем максимум",
+    "set_meanmax": "Отдельный слой D→32, затем среднее и максимум",
+    "set_attention": "Обучаемые веса компонентов после слоя D→32",
 }
 
 
@@ -86,18 +86,18 @@ def _masked_max(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 class RawSetDetector(nn.Module):
-    def __init__(self, mode: str, *, use_q: bool, use_status: bool):
+    def __init__(self, mode: str, *, embedding_dim: int, use_q: bool, use_status: bool):
         super().__init__()
         if mode not in SET_MODELS:
             raise ValueError(mode)
         self.mode, self.use_q, self.use_status = mode, use_q, use_status
-        input_width = 384 + (5 if use_status else 0)
-        self.projections = nn.ModuleList([nn.Linear(input_width, 16) for _ in TYPES])
-        self.attention = nn.ModuleList([nn.Linear(16, 1) for _ in TYPES])
-        pooled_width = 32 if mode == "set_meanmax" else 16
+        input_width = embedding_dim + (5 if use_status else 0)
+        self.projections = nn.ModuleList([nn.Linear(input_width, 32) for _ in TYPES])
+        self.attention = nn.ModuleList([nn.Linear(32, 1) for _ in TYPES])
+        pooled_width = 64 if mode == "set_meanmax" else 32
         self.final = nn.Sequential(
-            nn.Linear((13 if use_q else 0) + len(TYPES) * pooled_width, 16),
-            nn.ReLU(), nn.Dropout(0.15), nn.Linear(16, 1))
+            nn.Linear((13 if use_q else 0) + len(TYPES) * pooled_width, 32),
+            nn.ReLU(), nn.Dropout(0.15), nn.Linear(32, 1))
 
     def forward(self, batch) -> torch.Tensor:
         q, xs, masks, statuses = batch
@@ -141,7 +141,7 @@ def _set_batch(view: RawView, indices: np.ndarray, q_mean: np.ndarray,
     xs, masks, statuses = [], [], []
     for kind in TYPES:
         width = max(1, max(len(view.x[kind][int(i)]) for i in indices))
-        values = np.zeros((len(indices), width, 384), np.float32)
+        values = np.zeros((len(indices), width, view.dimension), np.float32)
         mask = np.zeros((len(indices), width), bool)
         onehot = np.zeros((len(indices), width, 5), np.float32)
         for row, index in enumerate(indices):
@@ -171,7 +171,8 @@ def fit_predict_set(bundle, embeddings: dict, data_variant: str, model_name: str
     torch.manual_seed(seed)
     if device == "cuda":
         torch.cuda.manual_seed_all(seed)
-    model = RawSetDetector(model_name, use_q=use_q, use_status=use_status).to(device)
+    model = RawSetDetector(model_name, embedding_dim=view.dimension,
+                           use_q=use_q, use_status=use_status).to(device)
     train_batch = _set_batch(view, train_idx, q_mean, q_scale, device)
     target = torch.tensor(bundle.y[train_idx], dtype=torch.float32, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.003, weight_decay=0.03)

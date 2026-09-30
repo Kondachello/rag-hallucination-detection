@@ -13,7 +13,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from data_io import load_bundle
-from embeddings import encode_jobs, make_jobs, triple_parts
+from embeddings import MAX_TOKENS, encode_jobs, make_jobs, triple_parts
 from experiment import LINEAR_METHODS
 from features import feature_matrix, make_fold_view, padded_tensors
 from models import NEURAL_METHODS, SetDetector, one_step_smoke
@@ -36,7 +36,7 @@ def check_token_positions(bundle, tokenizer_dir: Path):
                             [j.second for j in batch] if pair else None,
                             truncation=False, padding=True, return_offsets_mapping=True)
             for i, job in enumerate(batch):
-                assert len(enc["input_ids"][i]) <= 512
+                assert len(enc["input_ids"][i]) <= MAX_TOKENS
                 seq = enc.sequence_ids(i)
                 offsets = enc["offset_mapping"][i]
                 for _, _, part, left, right in job.targets:
@@ -49,7 +49,7 @@ def check_token_positions(bundle, tokenizer_dir: Path):
     class FakeModel(torch.nn.Module):
         def forward(self, input_ids, attention_mask, token_type_ids=None):
             base = input_ids.float().unsqueeze(-1)
-            frequencies = torch.arange(1, 385, device=base.device).float()
+            frequencies = torch.arange(1, 1025, device=base.device).float()
             output = torch.sin(base / frequencies)
             return type("FakeOutput", (), {"last_hidden_state": output})()
 
@@ -64,9 +64,9 @@ def check_token_positions(bundle, tokenizer_dir: Path):
 def check_shapes(bundle):
     rng = np.random.default_rng(42)
     embeddings = {
-        "context": rng.normal(size=(len(bundle.components), 384)).astype(np.float32),
-        "triple": rng.normal(size=(len(bundle.components), 384)).astype(np.float32),
-        "answer_cls": rng.normal(size=(len(bundle.ids), 384)).astype(np.float32),
+        "context": rng.normal(size=(len(bundle.components), 1024)).astype(np.float32),
+        "triple": rng.normal(size=(len(bundle.components), 1024)).astype(np.float32),
+        "answer_cls": rng.normal(size=(len(bundle.ids), 1024)).astype(np.float32),
     }
     train_idx = np.where(bundle.fold_numbers != 0)[0]
     test_idx = np.where(bundle.fold_numbers == 0)[0]
