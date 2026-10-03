@@ -1,3 +1,4 @@
 data/*.jsonl text eol=lf
 data/*.csv text eol=lf
 data/manifest.json text eol=lf
+embedding_cache/cache.part* -text

@@ -246,9 +246,6 @@ def extract_embeddings(bundle: Bundle, *, output_dir: Path | None = None,
                        encoder: str = PRIMARY_ENCODER, batch_size: int | None = None,
                        force: bool = False) -> dict:
     """Получает и сохраняет векторы одного закреплённого кодировщика."""
-    import torch
-    from transformers import AutoModel, AutoTokenizer
-
     if encoder not in ENCODERS:
         raise ValueError(f"Неизвестный кодировщик: {encoder}")
     profile = ENCODERS[encoder]
@@ -271,6 +268,8 @@ def extract_embeddings(bundle: Bundle, *, output_dir: Path | None = None,
                    for array, shape in zip(arrays.values(), expected)):
                 return arrays | {"manifest": meta}
 
+    import torch
+    from transformers import AutoModel, AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(profile.model_id, revision=profile.revision,
                                                trust_remote_code=profile.trust_remote_code,
                                                use_fast=True)

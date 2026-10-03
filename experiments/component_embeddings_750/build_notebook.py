@@ -38,9 +38,10 @@ import torch, numpy as np, pandas as pd
 from IPython.display import display, Markdown, FileLink
 from data_io import load_bundle, FEATURES
 bundle = load_bundle()
-if not torch.cuda.is_available():
-    raise RuntimeError('Выберите T4 GPU и снова нажмите «Выполнить все».')
-print('GPU:',torch.cuda.get_device_name(0), 'память:',round(torch.cuda.get_device_properties(0).total_memory/2**30,2),'ГиБ')
+if torch.cuda.is_available():
+    print('GPU:',torch.cuda.get_device_name(0), 'память:',round(torch.cuda.get_device_properties(0).total_memory/2**30,2),'ГиБ')
+else:
+    print('Используется CPU: готовые эмбеддинги уже сохранены в репозитории.')
 print('Ответы:',len(bundle.ids),'компоненты:',len(bundle.components))
 print('PyTorch:',torch.__version__)
 display(pd.crosstab(bundle.partitions,bundle.y,rownames=['Часть'],colnames=['Галлюцинация']))
@@ -72,6 +73,8 @@ assert len(METHODS)==32
 тексты вычисляются один раз. Повторный запуск использует готовый кэш векторов.
 '''),code('''from embeddings import extract_embeddings, example_prompts, MODEL_ID, MODEL_REVISION
 ARTIFACTS = EXP_ROOT/'artifacts_750_qwen8b'
+from embedding_cache import restore_cache
+restore_cache(bundle, ARTIFACTS)
 print(MODEL_ID, MODEL_REVISION)
 display(pd.Series(example_prompts(bundle),name='Точные примеры входов').to_frame())
 embeddings = extract_embeddings(bundle,output_dir=ARTIFACTS)

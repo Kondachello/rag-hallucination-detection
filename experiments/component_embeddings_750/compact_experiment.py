@@ -33,6 +33,7 @@ METHODS = tuple(f'{v}|{m}' for v in list(VARIANTS)[:7] for m in MODELS) + (
 PRIMARY = ('Q|logreg', 'Q_MEAN|logreg')
 
 def metrics(y, p):
+    p=np.asarray(p,dtype=np.float64)
     if not np.isfinite(p).all() or np.any((p<0)|(p>1)):
         raise ValueError('Неверные вероятности')
     return dict(ROC_AUC=roc_auc_score(y,p), PR_AUC=average_precision_score(y,p),

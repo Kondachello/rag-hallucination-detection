@@ -1,0 +1,37 @@
+{
+  "fingerprint": "0ac085b5f266d1c0c7e56d1a8deac597adb05f025d503cd55b20034cf4224c9d",
+  "archive_sha256": "ff33b37ba7e4f9cb33b98e7b27c9919475ad2429379bfd4622934bceeaffb6be",
+  "files": {
+    "embeddings.npz": "71a096457693c5b593409f6d1f0e1edb8e7368fc158205cd946aa11ae4c1a690",
+    "embeddings_manifest.json": "844acfd6553559dd11d3375c7fe7f5eac383b387aa8ee25fdf53d6d159ded5a6",
+    "embedding_trace.jsonl": "14883a535e54f2937fbbd971a0988bbba152f24a37324430a91f723dc2a80dce"
+  },
+  "parts": [
+    {
+      "name": "cache.part01",
+      "sha256": "118188087e1b4775759b29b72f20ebbfc9cfc23dadb4da6d25cde374b4242748",
+      "bytes": 50331648
+    },
+    {
+      "name": "cache.part02",
+      "sha256": "6cea69af6b4be512c59b6721efd6ce0be942faee4cf7bbd599ffcf2d4510c8d4",
+      "bytes": 50331648
+    },
+    {
+      "name": "cache.part03",
+      "sha256": "319ba6685a0dab0d5dba028c964b35c6c60d8d84a341d7f933646b11a97940cb",
+      "bytes": 50331648
+    },
+    {
+      "name": "cache.part04",
+      "sha256": "3249650254bdec47d2fb0e99c9abb9849fd367c20577cb525ccbe23f9f7be417",
+      "bytes": 50331648
+    },
+    {
+      "name": "cache.part05",
+      "sha256": "82769c1392fed4f2be67ffd38410d072c893758df6ce1fc8268ce661ab713084",
+      "bytes": 28856179
+    }
+  ],
+  "source": "User supplied component_750_results_unverified.zip; exact bytes preserved"
+}

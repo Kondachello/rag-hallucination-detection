@@ -9,6 +9,22 @@ import pandas as pd
 from compact_experiment import metrics, METHODS, PRIMARY
 from data_io import ROOT, DATA, load_bundle
 from embeddings import MODEL_ID, MODEL_REVISION
+from sklearn.metrics import log_loss
+
+def read_csv(path):
+    # Сохраняем точные float64 и равенство прогнозов при чтении CSV.
+    return pd.read_csv(path, float_precision='round_trip')
+
+def matches_metric(computed, saved, metric, method, group):
+    if np.isclose(computed,saved,atol=1e-8,rtol=0):
+        return True
+    # В первом запуске только этот контроль возвращал исходный float32.
+    # Подтверждаем его старую log_loss точно, не ослабляя остальные проверки.
+    if metric=='log_loss' and method=='BASELINE|entity_risk':
+        p=group.probability.to_numpy(np.float32)
+        legacy=log_loss(group.gold.to_numpy(),np.clip(p,1e-7,1-1e-7),labels=[0,1])
+        return np.isclose(legacy,saved,atol=1e-8,rtol=0)
+    return False
 
 def package(output_dir, *, expected_methods=METHODS):
     out=Path(output_dir); b=load_bundle()
@@ -25,9 +41,9 @@ def package(output_dir, *, expected_methods=METHODS):
                 raise ValueError('Неполные эмбеддинги')
     if em['component_order']!=[f"{int(c['source_id'])}:{c['component_id']}" for c in b.components] or em['response_order']!=b.ids:
         raise ValueError('Неверный порядок векторов')
-    cv=pd.read_csv(out/'cv_metrics.csv'); fm=pd.read_csv(out/'cv_fold_metrics.csv')
-    rm=pd.read_csv(out/'cv_repeat_metrics.csv'); hm=pd.read_csv(out/'holdout_metrics.csv')
-    oof=pd.read_csv(out/'cv_predictions.csv'); hp=pd.read_csv(out/'holdout_predictions.csv')
+    cv=read_csv(out/'cv_metrics.csv'); fm=read_csv(out/'cv_fold_metrics.csv')
+    rm=read_csv(out/'cv_repeat_metrics.csv'); hm=read_csv(out/'holdout_metrics.csv')
+    oof=read_csv(out/'cv_predictions.csv'); hp=read_csv(out/'holdout_predictions.csv')
     parts={'development':set(np.array(b.ids)[b.partitions=='development']),
            'holdout':set(np.array(b.ids)[b.partitions=='holdout'])}
     label_map=dict(zip(b.ids,b.y))
@@ -44,14 +60,15 @@ def package(output_dir, *, expected_methods=METHODS):
             else:
                 method=key[0]; row=hm[hm.method==method].iloc[0]
             for metric in ('ROC_AUC','PR_AUC','log_loss','F1'):
-                if not np.isclose(computed[metric],row[metric],atol=1e-8,rtol=0): raise ValueError('Метрики не совпали с прогнозами')
+                if not matches_metric(computed[metric],row[metric],metric,method,group):
+                    raise ValueError(f'Метрики не совпали: {scope}, {key}, {metric}: {computed[metric]} / {row[metric]}')
     if set(oof['repeat'])!=set(range(manifest['repeats'])): raise ValueError('Не все повторы готовы')
     for (repeat,fold,method),group in oof.groupby(['repeat','fold','method']):
         values=metrics(group.gold.to_numpy(),group.probability.to_numpy())
         saved=fm[(fm.repeat==repeat)&(fm.fold==fold)&(fm.method==method)]
         if len(saved)!=1: raise ValueError('Пропущена метрика части')
         for metric in ('ROC_AUC','PR_AUC','log_loss','F1'):
-            if not np.isclose(values[metric],saved.iloc[0][metric],atol=1e-8,rtol=0):
+            if not matches_metric(values[metric],saved.iloc[0][metric],metric,method,group):
                 raise ValueError('Метрика части не совпала с прогнозами')
     for row in cv.to_dict('records'):
         f=fm[fm.method==row['method']]; r=rm[rm.method==row['method']]
@@ -59,7 +76,7 @@ def package(output_dir, *, expected_methods=METHODS):
         for metric in ('ROC_AUC','PR_AUC','log_loss','F1'):
             for suffix,value in [('fold_mean',f[metric].mean()),('fold_std',f[metric].std(ddof=1)),('repeat_mean',r[metric].mean())]:
                 if not np.isclose(row[metric+'_'+suffix],value,atol=1e-8,rtol=0): raise ValueError('Неверная сводная метрика')
-    comparisons=pd.read_csv(out/'holdout_comparisons.csv')
+    comparisons=read_csv(out/'holdout_comparisons.csv')
     table=cv[['method','description','ROC_AUC_repeat_mean','ROC_AUC_fold_mean','ROC_AUC_fold_std','ROC_AUC_repeat_std','PR_AUC_repeat_mean','log_loss_repeat_mean']].copy()
     table=table.merge(hm[['method','ROC_AUC','PR_AUC','log_loss','F1']],on='method',suffixes=('','_holdout'))
     table.to_csv(out/'final_table.csv',index=False)
@@ -81,6 +98,7 @@ def package(output_dir, *, expected_methods=METHODS):
         "Метки исходных ответов выставлены GPT-4o. Методика извлечения компонентов отличается от прошлого пилота, "
         "поэтому разницу метрик между наборами нельзя приписать только размеру выборки. "
         "Отложенные результаты всех методов — заранее заданные вторичные проверки; выбор лучшего по ним потребует новой выборки.")
+    notes+=" Исходная log_loss контроля entity_risk проверена также в float32 для совместимости с первым запуском; новые запуски используют float64."
     report='# Отчёт: эмбеддинги компонентов на 750 ответах\n\n'+notes+'\n\n## Главная проверка\n\n'
     report+=comparisons.to_csv(index=False)+'\n## Полная таблица\n\n'
     report+='| '+' | '.join(display.columns)+' |\n|'+'|'.join('---' for _ in display.columns)+'|\n'
