@@ -1,0 +1,40 @@
+{
+  "files": {
+    "components.no_gold.jsonl": "5b95b9b6ee54007bd8b0ba27f10b3ace303fa84f5d6bfc9755bcc4e9f85e8ee6",
+    "confirmation_features.no_gold.csv": "e875b17b18f9e36f0a580db344b8fb7111c0a620bda4b5254d36122347ce6d2c",
+    "inputs.no_gold.jsonl": "49bbe8814dc6f8a4894cfd09f6712a64bb960efdc68bb3050693a60b30541191",
+    "labels.csv": "651c06e350a1cda86f1b105284a59bf8440ce7b323e9567b5be3b51188d4a3d7",
+    "splits.csv": "7edada02b2786819219502f64a8536fe723ae8dd3908d6a25977b59b0a72011d"
+  },
+  "dataset_signature": "9e86f79c29b0a1f66ef666d96d07a84aef20906bc6e507c86e0fdff1297a2f0e",
+  "archive_sha256": "57bbc1e0050288ec59025c99471f0200537a768c9881235befcfbae49c19a885",
+  "n_answers": 750,
+  "component_counts": {
+    "entity": 6950,
+    "relation": 5927,
+    "claim": 3991
+  },
+  "class_counts": {
+    "0": 494,
+    "1": 256
+  },
+  "n_groups": 693,
+  "n_pilot_overlap": 100,
+  "partition_counts": {
+    "development": 629,
+    "holdout": 121
+  },
+  "relation_confirmation": "Unavailable; all relations are not_verified; excluded from confirmation features",
+  "label_source": "openai/gpt-4o; original answers only; revised answers excluded",
+  "features": [
+    "entity_log_count",
+    "entity_ungrounded_rate",
+    "relation_log_count",
+    "relation_missing",
+    "claim_log_count",
+    "claim_missing",
+    "claim_unsupported_rate",
+    "claim_contradicted_rate",
+    "claim_unknown_rate"
+  ]
+}
