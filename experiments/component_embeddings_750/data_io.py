@@ -21,7 +21,8 @@ def component_key(row):
     return f"{int(row['source_id'])}:{row['component_id']}"
 
 def digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    """Хеш текстовых входов с одинаковыми переносами строк на Windows/Linux."""
+    return hashlib.sha256(Path(path).read_bytes().replace(b'\r\n', b'\n')).hexdigest()
 
 @dataclass
 class Bundle:
@@ -54,6 +55,8 @@ class Bundle:
 def load_bundle(data_dir=DATA):
     data_dir = Path(data_dir)
     manifest = json.loads((data_dir/'manifest.json').read_text(encoding='utf-8'))
+    if manifest.get('file_hash_format') != 'sha256-text-lf-v1':
+        raise ValueError('Устаревший манифест данных: обновите пакет из GitHub.')
     for name, expected in manifest['files'].items():
         if digest(data_dir/name) != expected:
             raise ValueError(f'Изменился входной файл: {name}')

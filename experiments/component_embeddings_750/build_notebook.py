@@ -22,7 +22,7 @@ cells=[md('''# Эмбеддинги компонентов: 750 ответов
 import subprocess, sys, os
 REPO = 'https://github.com/Kondachello/rag-hallucination-detection.git'
 BRANCH = 'span_by_kolya'
-if (Path.cwd()/'compact_experiment.py').is_file():
+if (Path.cwd()/'compact_experiment.py').is_file() and not Path.cwd().is_relative_to(Path('/content/component_750_repo')):
     EXP_ROOT = Path.cwd()
 else:
     checkout = Path('/content/component_750_repo')

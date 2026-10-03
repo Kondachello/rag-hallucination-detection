@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedGroupKFold
-from data_io import DATA, FEATURES, load_bundle
+from data_io import DATA, FEATURES, digest, load_bundle
 
 def sha(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
@@ -108,8 +108,8 @@ def prepare(archive, pilot_labels):
         (DATA/name).write_text(''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in rows),encoding='utf-8')
     for name, rows in [('labels.csv',labels), ('confirmation_features.no_gold.csv', features), ('splits.csv',splits)]:
         pd.DataFrame(rows).to_csv(DATA/name,index=False)
-    files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(DATA.iterdir()) if p.name!='manifest.json'}
-    manifest = dict(files=files, dataset_signature=sha(json.dumps(files,sort_keys=True)),
+    files = {p.name: digest(p) for p in sorted(DATA.iterdir()) if p.name!='manifest.json'}
+    manifest = dict(file_hash_format='sha256-text-lf-v1', files=files, dataset_signature=sha(json.dumps(files,sort_keys=True)),
         archive_sha256=hashlib.sha256(Path(archive).read_bytes()).hexdigest(), n_answers=len(inputs),
         component_counts=dict(Counter(c['component_type'] for c in components)),
         class_counts=dict(Counter(str(v) for v in y)), n_groups=len(set(groups)),
